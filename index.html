@@ -1,20 +1,4 @@
 <!DOCTYPE html>
-<html>
-<head>
-  <style>
-    body { font-family: 'Arial', sans-serif; color: #333; line-height: 1.4; padding: 20px; }
-    .header { display: flex; align-items: center; border-bottom: 2px solid #ff0000; padding-bottom: 10px; margin-bottom: 20px; }
-    .logo { height: 60px; } /* Reference: mejason-logo.png */
-    .company-name { color: #000; font-weight: bold; font-size: 24px; margin-left: 15px; }
-    .red-text { color: #ff0000; }
-    h1 { font-size: 18px; text-align: center; text-transform: uppercase; margin-top: 30px; }
-    .section-title { background-color: #f2f2f2; font-weight: bold; padding: 5px; margin-top: 15px; border-left: 5px solid #ff0000; }
-    .field { margin: 10px 0; border-bottom: 1px dotted #ccc; }
-    .footer { margin-top: 50px; text-align: center; font-style: italic; color: #555; border-top: 1px solid #ff0000; padding-top: 10px; }
-  </style>
-</head>
-<body>
-  <div class="head<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -285,13 +269,7 @@ create policy "allow all" on payments for all using (true) with check (true);</p
     <div class="ep-subtitle">Kenya's Smart POS — Staff Login</div>
 
     <!-- Single-screen login -->
-    <div id="ep-shop-preview" class="ep-shop-badge" style="visibility:hidden;margin-bottom:18px">📍 <span id="ep-shop-preview-name"></span></div>
-
-    <div class="ep-label">SHOP / CLIENT ID</div>
-    <input class="ep-input" id="ep-shop-id" placeholder="e.g. client-1778569091064"
-      onblur="epLookupShop()" onkeydown="if(event.key==='Enter')document.getElementById('ep-username').focus()"/>
-
-    <div class="ep-label" style="margin-top:14px">USERNAME</div>
+    <div class="ep-label">USERNAME</div>
     <input class="ep-input" id="ep-username" placeholder="Enter your username"
       onkeydown="if(event.key==='Enter')document.getElementById('ep-password').focus()"/>
 
@@ -1018,29 +996,14 @@ function hasPerm(key) {
 }
 
 // ── LOGIN ──────────────────────────────────────────────────
-async function epLookupShop() {
-  const shopId = document.getElementById('ep-shop-id').value.trim();
-  const preview = document.getElementById('ep-shop-preview');
-  const nameEl  = document.getElementById('ep-shop-preview-name');
-  if (!shopId || !useSupabase) { preview.style.visibility = 'hidden'; return; }
-  try {
-    const { data } = await sb.from('clients').select('name,status').eq('id', shopId).single();
-    if (data?.name) {
-      nameEl.textContent = data.name + (data.status === 'suspended' ? ' (suspended)' : '');
-      preview.style.visibility = 'visible';
-    } else { preview.style.visibility = 'hidden'; }
-  } catch(e) { preview.style.visibility = 'hidden'; }
-}
-
 async function epLogin() {
-  const shopId   = document.getElementById('ep-shop-id').value.trim();
+  const shopId   = 'client-1778569091064';
   const username = document.getElementById('ep-username').value.trim();
   const password = document.getElementById('ep-password').value;
   const errEl    = document.getElementById('ep-err');
   const btn      = document.getElementById('ep-login-btn');
   errEl.textContent = '';
 
-  if (!shopId)   { errEl.textContent = 'Please enter your Shop / Client ID.'; document.getElementById('ep-shop-id').focus(); return; }
   if (!username) { errEl.textContent = 'Please enter your username.'; document.getElementById('ep-username').focus(); return; }
   if (!password) { errEl.textContent = 'Please enter your password.'; document.getElementById('ep-password').focus(); return; }
 
@@ -1052,7 +1015,7 @@ async function epLogin() {
       const { data: shop, error: shopErr } = await sb.from('clients').select('name,status').eq('id', shopId).single();
       if (shopErr || !shop) {
         btn.disabled = false; btn.textContent = 'Sign In →';
-        errEl.textContent = 'Shop ID not found. Check and try again.';
+        errEl.textContent = 'Service unavailable. Contact EdosPoa support.';
         return;
       }
       if (shop.status === 'suspended') {
@@ -1186,11 +1149,9 @@ function logout() {
   if (useSupabase) sb = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
   document.getElementById('app').classList.remove('show');
   document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('ep-shop-id').value = '';
   document.getElementById('ep-username').value = '';
   document.getElementById('ep-password').value = '';
   document.getElementById('ep-err').textContent = '';
-  document.getElementById('ep-shop-preview').style.visibility = 'hidden';
 }
 
 const DEPTS = [
@@ -3818,22 +3779,5 @@ async function renderMyModules() {
 }
 
 </script>
-</body>
-</html>er">
-    <!-- The script will inject the mejason-logo.png here -->
-    <div class="company-name">mejasan <br><span class="red-text" style="font-size: 14px;">Media Production</span></div>
-  </div>
-
-  <h1><?= docTitle ?></h1>
-
-  <div class="section-title">1. EVENT OVERVIEW & LOGISTICS</div>
-  <div class="field"><b>Client Name:</b> <?= clientName ?></div>
-  <div class="field"><b>Event Date:</b> <?= eventDate ?></div>
-  <div class="field"><b>Venue:</b> <?= venue ?></div>
-
-  <div class="section-title">CONTRACT TERMS</div>
-  <p><?= contractBody ?></p>
-
-  <div class="footer">"We Deliver Quality"</div>
 </body>
 </html>
