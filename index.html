@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Mejason POS</title>
+<title>EdosPoa POS</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css"/>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
@@ -442,6 +442,54 @@ create policy "allow all" on payments for all using (true) with check (true);</p
         <button class="btn btn-outline btn-sm" onclick="closeModal('edit-user-modal')"><i class="ti ti-x"></i></button>
       </div>
       <div style="padding:18px" id="edit-user-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Department Add/Edit Modal -->
+  <div class="modal-bg" id="dept-modal">
+    <div class="modal" style="width:440px">
+      <div class="modal-hdr">
+        <span><i class="ti ti-building-store" style="color:var(--red)"></i> <span id="dept-modal-title">Add Department</span></span>
+        <button class="btn btn-outline btn-sm" onclick="closeModal('dept-modal')"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:18px;display:grid;gap:12px">
+        <input type="hidden" id="dept-edit-idx"/>
+        <div><label>Department Name *</label><input id="dept-name-in" placeholder="e.g. Wedding"/></div>
+        <div>
+          <label>Icon</label>
+          <select id="dept-icon-in">
+            <option value="ti-heart">Heart (Wedding)</option>
+            <option value="ti-palette">Palette (Traditional/Events)</option>
+            <option value="ti-school">School (Graduation)</option>
+            <option value="ti-briefcase">Briefcase (Corporate)</option>
+            <option value="ti-camera">Camera (Studio/Photography)</option>
+            <option value="ti-cut">Scissors (Editing)</option>
+            <option value="ti-tool">Tool (Equipment/Rentals)</option>
+            <option value="ti-id">ID Card (Passport/ID)</option>
+            <option value="ti-video">Video</option>
+            <option value="ti-photo">Photo</option>
+            <option value="ti-music">Music</option>
+            <option value="ti-cake">Cake (Catering/Events)</option>
+            <option value="ti-shirt">Clothing/Fashion</option>
+            <option value="ti-star">Star (General)</option>
+            <option value="ti-hexagon">Hexagon (Custom)</option>
+          </select>
+        </div>
+        <div>
+          <label>Colour</label>
+          <div style="display:flex;align-items:center;gap:10px">
+            <input type="color" id="dept-color-in" style="width:48px;height:34px;padding:2px;border-radius:6px;border:1px solid var(--border);cursor:pointer"
+              oninput="document.getElementById('dept-color-preview').style.background=this.value"
+              onchange="document.getElementById('dept-color-preview').style.background=this.value"/>
+            <div id="dept-color-preview" style="width:32px;height:32px;border-radius:6px;border:1px solid var(--border)"></div>
+            <span id="dept-icon-preview" style="width:32px;height:32px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px"></span>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-red" style="flex:1;justify-content:center" onclick="saveDepartmentModal()"><i class="ti ti-check"></i> Save Department</button>
+          <button class="btn btn-outline" onclick="closeModal('dept-modal')">Cancel</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -966,6 +1014,7 @@ const ACTION_PERMS = [
   { key:'analytics.export',   label:'Export / Download Reports',      group:'Analytics'  },
   { key:'settings.edit',      label:'Edit Business Settings',         group:'Settings'   },
   { key:'settings.logo',      label:'Upload / Change Business Logo',  group:'Settings'   },
+  { key:'dept.manage',        label:'Manage Departments (Add/Edit/Delete)', group:'Settings' },
   { key:'staff.manage',       label:'Add, Edit & Remove Staff',       group:'Staff'      },
 ];
 
@@ -973,7 +1022,7 @@ function defaultPermsForRole(role) {
   const all = Object.fromEntries(ACTION_PERMS.map(p => [p.key, true]));
   if (role === 'owner' || role === 'admin') return all;
   if (role === 'manager') {
-    return { ...all, 'settings.edit':false, 'settings.logo':false, 'staff.manage':false, 'inv.delete':false, 'clients.delete':false, 'inventory.delete':false };
+    return { ...all, 'settings.edit':false, 'settings.logo':false, 'dept.manage':false, 'staff.manage':false, 'inv.delete':false, 'clients.delete':false, 'inventory.delete':false };
   }
   // cashier
   return {
@@ -983,7 +1032,7 @@ function defaultPermsForRole(role) {
     'clients.create':true, 'clients.edit':true, 'clients.delete':false,
     'inventory.add':false, 'inventory.edit':false, 'inventory.delete':false,
     'analytics.view':false, 'analytics.export':false,
-    'settings.edit':false, 'settings.logo':false, 'staff.manage':false,
+    'settings.edit':false, 'settings.logo':false, 'dept.manage':false, 'staff.manage':false,
   };
 }
 
@@ -997,7 +1046,6 @@ function hasPerm(key) {
 
 // ── LOGIN ──────────────────────────────────────────────────
 async function epLogin() {
-  const shopId   = 'client-1778743707934';
   const username = document.getElementById('ep-username').value.trim();
   const password = document.getElementById('ep-password').value;
   const errEl    = document.getElementById('ep-err');
@@ -1010,6 +1058,34 @@ async function epLogin() {
   btn.disabled = true;
   btn.innerHTML = '<span style="display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px"></span>Signing in…';
 
+  let shopId = null;
+  let staffRecord = null;
+
+  if (useSupabase) {
+    try {
+      // Search across all businesses to find staff with matching username and password
+      const { data: allStaff, error } = await sb
+        .from('pos_staff')
+        .select('*')
+        .eq('username', username);
+      
+      if (!error && allStaff && allStaff.length > 0) {
+        // Find staff record with matching password
+        staffRecord = allStaff.find(s => s.password_hash === password);
+        if (staffRecord) {
+          shopId = staffRecord.client_id;
+        }
+      }
+    } catch(e) { console.warn('Staff lookup error:', e); }
+  }
+
+  if (!staffRecord || !shopId) {
+    btn.disabled = false; btn.textContent = 'Sign In →';
+    errEl.textContent = 'Incorrect username or password.';
+    return;
+  }
+
+  // Verify shop exists and is active
   if (useSupabase) {
     try {
       const { data: shop, error: shopErr } = await sb.from('clients').select('name,status').eq('id', shopId).single();
@@ -1028,25 +1104,6 @@ async function epLogin() {
     } catch(e) { console.warn('Shop lookup error:', e); currentShopId = shopId; currentShopName = shopId; }
   } else {
     currentShopId = shopId; currentShopName = shopId;
-  }
-
-  let staffRecord = null;
-  if (useSupabase) {
-    try {
-      const { data, error } = await sb
-        .from('pos_staff')
-        .select('*')
-        .eq('client_id', currentShopId)
-        .eq('username', username)
-        .single();
-      if (!error && data) staffRecord = data;
-    } catch(e) {}
-  }
-
-  if (!staffRecord || staffRecord.password_hash !== password) {
-    btn.disabled = false; btn.textContent = 'Sign In →';
-    errEl.textContent = 'Incorrect username or password.';
-    return;
   }
 
   if (staffRecord.is_active === false) {
@@ -1117,9 +1174,9 @@ async function epLogin() {
   const shopEl = document.getElementById('tb-shop-name');
   if (shopEl) shopEl.textContent = currentShopName || currentShopId;
 
+  initShopSession(currentShopId);
   await loadShopSettings();
   buildSidebar();
-  initShopSession(currentShopId);
   await loadFromSupabase();
   navToFirstAllowed();
 
@@ -1154,7 +1211,7 @@ function logout() {
   document.getElementById('ep-err').textContent = '';
 }
 
-const DEPTS = [
+let DEPTS = [
   { id: 'wedding',    name: 'Wedding',    icon: 'ti-heart',    color: '#C8252A' },
   { id: 'traditional',name: 'Traditional',icon: 'ti-palette',  color: '#d97706' },
   { id: 'graduation', name: 'Graduation', icon: 'ti-school',   color: '#7c3aed' },
@@ -1249,6 +1306,7 @@ let INVENTORY = (() => {
 // ── SETTINGS object — persisted to localStorage ─────────
 const SETTINGS_DEFAULTS = {
   logoDataUrl: '',
+  vatRate: 16,
   bizName: 'Mejason Media Production',
   bizLocation: 'Joventure Hotel, 1st Floor, Kibos Rd, Kisumu',
   bizPhone1: '+254 700 864849',
@@ -1265,32 +1323,59 @@ const SETTINGS_DEFAULTS = {
   instagram: '@mejasonmedia',
   email: 'mejasanw@gmail.com',
   website: 'www.mejasonmedia.co.ke',
+  kraPin: '',
+  paymentInstructions: 'KCB Bank — Account 1310465029\nM-Pesa Till — 9013189',
+  invoiceFootnote: 'We Deliver Quality.',
+  departments: [
+    { id: 'wedding',    name: 'Wedding',    icon: 'ti-heart',    color: '#C8252A' },
+    { id: 'traditional',name: 'Traditional',icon: 'ti-palette',  color: '#d97706' },
+    { id: 'graduation', name: 'Graduation', icon: 'ti-school',   color: '#7c3aed' },
+    { id: 'corporate',  name: 'Corporate',  icon: 'ti-briefcase',color: '#2563eb' },
+    { id: 'studio',     name: 'Studio',     icon: 'ti-camera',   color: '#0891b2' },
+    { id: 'editing',    name: 'Editing',    icon: 'ti-cut',      color: '#16a34a' },
+    { id: 'equipment',  name: 'Equipment',  icon: 'ti-tool',     color: '#ea580c' },
+    { id: 'passport',   name: 'Passport/ID',icon: 'ti-id',       color: '#db2777' },
+  ]
 };
 let SETTINGS = { ...SETTINGS_DEFAULTS };
+
+// Get departments from settings (fallback to SETTINGS_DEFAULTS if not set)
+function getDepts() {
+  return (SETTINGS.departments && SETTINGS.departments.length) ? SETTINGS.departments : SETTINGS_DEFAULTS.departments;
+}
 
 async function loadShopSettings() {
   if (!useSupabase || !currentShopId) return;
   try {
     const { data } = await sb.from('pos_shop_settings').select('settings').eq('shop_id', currentShopId).single();
     if (data && data.settings) {
-      SETTINGS = { ...SETTINGS_DEFAULTS, ...data.settings };
+      const { _services, ...settingsOnly } = data.settings;
+      SETTINGS = { ...SETTINGS_DEFAULTS, ...settingsOnly };
+      DEPTS = getDepts();  // Update DEPTS from settings
+      if (_services && Array.isArray(_services) && _services.length) SERVICES = _services;
       return;
     }
   } catch(e) {}
   // Fallback: try shop-namespaced localStorage (migration from old key)
   try {
     const cached = localStorage.getItem('mmp_settings_' + currentShopId) || localStorage.getItem('mmp_settings');
-    if (cached) SETTINGS = { ...SETTINGS_DEFAULTS, ...JSON.parse(cached) };
+    if (cached) {
+      const { _services, ...settingsOnly } = JSON.parse(cached);
+      SETTINGS = { ...SETTINGS_DEFAULTS, ...settingsOnly };
+      DEPTS = getDepts();  // Update DEPTS from settings
+      if (_services && Array.isArray(_services) && _services.length) SERVICES = _services;
+    }
   } catch(e) {}
 }
 
 async function persistShopSettings() {
   if (!useSupabase || !currentShopId) return;
+  const saved = { ...SETTINGS, _services: SERVICES };
   try {
-    await sb.from('pos_shop_settings').upsert({ shop_id: currentShopId, settings: SETTINGS, updated_at: new Date().toISOString() });
-    localStorage.setItem('mmp_settings_' + currentShopId, JSON.stringify(SETTINGS));
+    await sb.from('pos_shop_settings').upsert({ shop_id: currentShopId, settings: saved, updated_at: new Date().toISOString() });
+    localStorage.setItem('mmp_settings_' + currentShopId, JSON.stringify(saved));
   } catch(e) {
-    localStorage.setItem('mmp_settings_' + currentShopId, JSON.stringify(SETTINGS));
+    localStorage.setItem('mmp_settings_' + currentShopId, JSON.stringify(saved));
   }
 }
 
@@ -1369,7 +1454,7 @@ function nav(page, scroll) {
   if (page === 'inventory')  renderInventory();
   if (page === 'analytics')  renderAnalytics();
   if (page === 'users')      renderUsers();
-  if (page === 'settings')   renderSettings();
+  if (page === 'settings')   { renderSettings(); setTimeout(renderDepartmentsList, 10); }
   if (page === 'services')   renderServices();
   if (page === 'modules')    renderMyModules();
   if (scroll) document.querySelector('.main').scrollTop = 0;
@@ -1548,6 +1633,7 @@ function renderPOS() {
         <div class="cart-foot">
           <div class="cf-row"><span>Subtotal</span><span id="cf-sub">KSh 0</span></div>
           <div class="cf-row"><span>Discount</span><span id="cf-disc" style="color:var(--green)">- KSh 0</span></div>
+          <div class="cf-row" id="cf-vat-row"><span id="cf-vat-lbl">VAT (16%)</span><span id="cf-vat">KSh 0</span></div>
           <div class="cf-total"><span>Total</span><span id="cf-total" style="color:var(--red)">KSh 0</span></div>
           <div id="cf-balance-row" style="display:none;justify-content:space-between;font-size:11px;font-weight:600;color:#dc2626;padding:2px 0 6px"><span>Balance Due</span><span id="cf-balance">KSh 0</span></div>
           <div style="margin-bottom:8px">
@@ -1696,11 +1782,16 @@ function recalc() {
   const sub = cart.reduce((a, c) => a + c.price * c.qty, 0);
   const disc = Math.min(parseFloat(document.getElementById('disc-pct')?.value) || 0, 100);
   const da = sub * disc / 100;
-  const total = sub - da;
+  const vatRate = SETTINGS.vatRate ?? 16;
+  const vatAmt = (sub - da) * vatRate / 100;
+  const total = sub - da + vatAmt;
   const s = document.getElementById('cf-sub'); if (s) s.textContent = fmt(sub);
   const ds = document.getElementById('cf-disc'); if (ds) ds.textContent = '- ' + fmt(da);
+  const vl = document.getElementById('cf-vat-lbl'); if (vl) vl.textContent = `VAT (${vatRate}%)`;
+  const vs = document.getElementById('cf-vat'); if (vs) vs.textContent = fmt(vatAmt);
+  const vr = document.getElementById('cf-vat-row'); if (vr) vr.style.display = vatRate > 0 ? 'flex' : 'none';
   const t = document.getElementById('cf-total'); if (t) t.textContent = fmt(total);
-  return { sub, da, total, disc };
+  return { sub, da, vatRate, vatAmt, total, disc };
 }
 
 function selPM(pm) {
@@ -1731,7 +1822,7 @@ function onClientSelect(id) {
 
 async function checkout() {
   if (!cart.length) { alert('Cart is empty.'); return; }
-  const { sub, da, total, disc } = recalc();
+  const { sub, da, vatRate, vatAmt, total, disc } = recalc();
   const clientSel    = document.getElementById('cart-client')?.value;
   let   clientName   = document.getElementById('cart-cname')?.value.trim();
   const clientPhone  = document.getElementById('cart-cphone')?.value.trim();
@@ -1762,6 +1853,7 @@ async function checkout() {
     clientName, clientPhone, clientEmail: clientEmail || '',
     clientWhatsApp: clientWA || '', clientId: clientSel || null,
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
+    vatRate, vatAmt,
     total, payMethod, status: payMethod === 'credit' ? 'Unpaid' : (isPartial ? 'Partial' : 'Paid'),
     date: dateStr(), time: timeStr(), eventDate: eventDate || dateStr(),
     cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
@@ -1986,6 +2078,7 @@ function buildInvoiceHTML(inv) {
       <div class="inv-totals-box">
         <div class="inv-totals-line"><span class="lbl">Subtotal</span><span class="val">${fmt(inv.subtotal)}</span></div>
         ${inv.discountAmt > 0 ? `<div class="inv-totals-line discount"><span class="lbl">Discount (${inv.discountPct}%)</span><span class="val">&minus; ${fmt(inv.discountAmt)}</span></div>` : ''}
+        ${inv.vatAmt > 0 ? `<div class="inv-totals-line"><span class="lbl">VAT (${inv.vatRate}%)</span><span class="val">${fmt(inv.vatAmt)}</span></div>` : ''}
         <div class="inv-totals-line" style="font-weight:700;font-size:13px;border-top:2px solid #ccc;padding-top:8px;margin-top:4px"><span class="lbl" style="color:#111">Total</span><span class="val" style="color:#111">${fmt(inv.total)}</span></div>
       </div>
     </div>
@@ -2008,9 +2101,8 @@ function buildInvoiceHTML(inv) {
     </div>` : ''}
     <div class="inv-pay-instructions">
       <strong>Payment Instructions</strong>
-      KCB Bank &mdash; Account 1310465029<br/>
-      M-Pesa Till &mdash; 9013189<br/>
-      Email &mdash; mejasanw@gmail.com
+      ${S.paymentInstructions.split('\n').map(line => line.trim()).filter(Boolean).join('<br/>')}<br/>
+      Email &mdash; ${S.email}
     </div>
     <div class="inv-sig">
       <div class="inv-sig-block">
@@ -2024,7 +2116,7 @@ function buildInvoiceHTML(inv) {
     </div>
     <div style="margin-top:16px;padding-top:12px;border-top:1px solid #eee;font-size:9px;color:#999">
       ${S.kraPin ? `<div style="margin-bottom:4px">KRA PIN: ${S.kraPin}</div>` : ''}
-      <div class="inv-footer-line" style="margin:0;padding:0;border:none;text-transform:capitalize">${S.bizName} &nbsp;|&nbsp; Event Coverage &amp; Media Production</div>
+      <div class="inv-footer-line" style="margin:0;padding:0;border:none;text-transform:none">${S.bizName} &nbsp;|&nbsp; ${S.invoiceFootnote || 'We Deliver Quality.'}</div>
     </div>
   </div>`;
 }
@@ -2122,6 +2214,7 @@ function buildQuotationHTML(inv) {
       <div class="inv-totals-box">
         <div class="inv-totals-line"><span class="lbl">Subtotal</span><span class="val">${fmt(inv.subtotal)}</span></div>
         ${inv.discountAmt > 0 ? `<div class="inv-totals-line discount"><span class="lbl">Discount (${inv.discountPct}%)</span><span class="val">&minus; ${fmt(inv.discountAmt)}</span></div>` : ''}
+        ${inv.vatAmt > 0 ? `<div class="inv-totals-line"><span class="lbl">VAT (${inv.vatRate}%)</span><span class="val">${fmt(inv.vatAmt)}</span></div>` : ''}
         <div class="inv-totals-line" style="font-weight:700;font-size:13px;border-top:2px solid #ccc;padding-top:8px;margin-top:4px"><span class="lbl" style="color:#111">Total</span><span class="val" style="color:#111">${fmt(inv.total)}</span></div>
       </div>
     </div>
@@ -2150,7 +2243,7 @@ function buildQuotationHTML(inv) {
     </div>
     <div style="margin-top:16px;padding-top:12px;border-top:1px solid #eee;font-size:9px;color:#999">
       ${S.kraPin ? `<div style="margin-bottom:4px">KRA PIN: ${S.kraPin}</div>` : ''}
-      <div class="inv-footer-line" style="margin:0;padding:0;border:none;text-transform:capitalize">${S.bizName} &nbsp;|&nbsp; Event Coverage &amp; Media Production</div>
+      <div class="inv-footer-line" style="margin:0;padding:0;border:none;text-transform:none">${S.bizName} &nbsp;|&nbsp; ${S.invoiceFootnote || 'We Deliver Quality.'}</div>
     </div>
   </div>`;
 }
@@ -2182,6 +2275,7 @@ function buildReceiptHTML(inv) {
     <div class="receipt-totals">
       <div class="receipt-total-line"><span>Subtotal</span><span style="text-align:right">${fmt(inv.subtotal)}</span></div>
       ${inv.discountAmt > 0 ? `<div class="receipt-total-line"><span>Discount</span><span style="text-align:right">-${fmt(inv.discountAmt)}</span></div>` : ''}
+      ${inv.vatAmt > 0 ? `<div class="receipt-total-line"><span>VAT (${inv.vatRate}%)</span><span style="text-align:right">${fmt(inv.vatAmt)}</span></div>` : ''}
       <div class="receipt-total-line final"><span class="label">TOTAL</span><span class="amount">${fmt(inv.total)}</span></div>
       ${pays.length ? `<div style="margin-top:8px;border-top:1px dashed var(--border);padding-top:8px">
         <div class="receipt-total-line"><span>Paid</span><span style="text-align:right;color:var(--green);font-weight:700">${fmt(totalPaid)}</span></div>
@@ -2191,10 +2285,8 @@ function buildReceiptHTML(inv) {
     <div class="receipt-footer">
       <div class="receipt-footer-line"><strong>Payment Method</strong></div>
       <div class="receipt-footer-line" style="text-transform:uppercase;font-weight:700;font-size:11px">${inv.payMethod}</div>
-      <div style="margin-top:10px;font-size:9px;line-height:1.8">
-        🏦 KCB: 1310465029<br/>📱 M-Pesa: 9013189<br/>📧 mejasanw@gmail.com<br/>📞 0700864849
-      </div>
-      <div style="margin-top:10px;font-size:9px;color:var(--muted)">Thank you for your business!</div>
+      ${S.paymentInstructions ? `<div style="margin-top:10px;font-size:9px;line-height:1.9">${S.paymentInstructions.split('\n').filter(Boolean).map(l=>l.trim()).join('<br/>')}${S.email?'<br/>📧 '+S.email:''}${S.bizPhone1?'<br/>📞 '+S.bizPhone1:''}</div>` : ''}
+      <div style="margin-top:10px;font-size:9px;color:var(--muted)">${S.invoiceFootnote || 'We Deliver Quality.'}</div>
     </div>
   </div>`;
 }
@@ -3550,8 +3642,12 @@ function renderSettings() {
           <div><label>Account Holder</label><input id="set-bankHolder" value="${s.bankHolder}" placeholder="Account holder name"/></div>
           <div><label>Branch</label><input id="set-bankBranch" value="${s.bankBranch}" placeholder="e.g. Kisumu"/></div>
           <div><label>KRA PIN (Kenya)</label><input id="set-kraPin" value="${s.kraPin}" placeholder="e.g. A123456789ABC"/></div>
+          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end">
+            <div><label>VAT Rate (%)</label><input type="number" id="set-vatRate" value="${s.vatRate ?? 16}" min="0" max="100" step="0.01" placeholder="e.g. 16"/></div>
+            <div style="padding-bottom:1px;font-size:11px;color:var(--muted);white-space:nowrap">${(s.vatRate ?? 16) === 0 ? 'VAT disabled' : `${s.vatRate ?? 16}% applied to invoices`}</div>
+          </div>
           <div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
-            <i class="ti ti-info-circle"></i> Bank details and KRA PIN will appear on invoices and quotations.
+            <i class="ti ti-info-circle"></i> Bank details and KRA PIN will appear on invoices and quotations. Set VAT to 0 to disable it for this shop.
           </div>
         </div>
       </div>
@@ -3573,6 +3669,34 @@ function renderSettings() {
           <div><label>Website</label><input id="set-website" value="${s.website}"/></div>
         </div>
       </div>
+      <div class="card">
+        <div class="card-title"><i class="ti ti-receipt" style="color:var(--amber)"></i> Payment Instructions</div>
+        <div style="display:grid;gap:10px">
+          <div><label>Payment Instructions (shown on invoices &amp; receipts)</label><textarea id="set-paymentInstructions" style="font-family:monospace;font-size:12px;padding:8px;border:1px solid #ccc;border-radius:6px;min-height:60px;resize:vertical">${s.paymentInstructions}</textarea></div>
+          <div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
+            <i class="ti ti-info-circle"></i> Each line appears on invoices and receipts. Use "KCB Bank — Account XXX" format.
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title"><i class="ti ti-file-invoice" style="color:var(--purple)"></i> Invoice Customisation</div>
+        <div style="display:grid;gap:10px">
+          <div><label>Invoice / Receipt Footer Tagline</label><input id="set-invoiceFootnote" value="${s.invoiceFootnote||'We Deliver Quality.'}" placeholder="e.g. We Deliver Quality."/></div>
+          <div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
+            <i class="ti ti-info-circle"></i> This tagline appears at the bottom of every invoice and quotation PDF.
+          </div>
+        </div>
+      </div>
+      <div class="card" style="grid-column:1/-1">
+        <div class="card-title"><i class="ti ti-building-store" style="color:var(--amber)"></i> Department Management</div>
+        <div style="display:grid;gap:10px">
+          <div id="departments-list" style="display:grid;gap:8px"></div>
+          ${hasPerm('dept.manage') ? `<button class="btn btn-green btn-sm" style="justify-content:center" onclick="addDepartmentUI()"><i class="ti ti-plus"></i> Add Department</button>` : '<div style="font-size:11px;color:var(--muted)"><i class="ti ti-lock"></i> You do not have permission to manage departments.</div>'}
+          <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:10px;font-size:11px;color:#854d0e">
+            <i class="ti ti-info-circle"></i> Departments are scoped per shop. Changes apply immediately and persist across all staff sessions. Deleting a department also removes its services.
+          </div>
+        </div>
+      </div>
     </div>
     <div style="margin-top:12px;display:flex;align-items:center;gap:10px">
       <button class="btn btn-red" onclick="saveSettings()"><i class="ti ti-check"></i> Save Settings</button>
@@ -3584,14 +3708,99 @@ async function saveSettings() {
   const fields = ['bizName','bizLocation','bizPhone1','bizPhone2','bizPhone3',
     'mpesaPaybill','mpesaAccount','mpesaTill',
     'bankName','bankAccount','bankHolder','bankBranch','kraPin',
-    'facebook','instagram','email','website'];
+    'facebook','instagram','email','website','paymentInstructions','invoiceFootnote'];
   fields.forEach(k => {
     const el = document.getElementById('set-' + k);
     if (el) SETTINGS[k] = el.value.trim();
   });
+  const vatEl = document.getElementById('set-vatRate');
+  if (vatEl) SETTINGS.vatRate = Math.max(0, Math.min(100, parseFloat(vatEl.value) || 0));
+  DEPTS = getDepts();  // Update DEPTS after saving
   await persistShopSettings();
   const msg = document.getElementById('settings-saved-msg');
   if (msg) { msg.style.display = 'inline-flex'; setTimeout(() => msg.style.display = 'none', 2500); }
+  renderDepartmentsList();  // Refresh departments list
+}
+
+function renderDepartmentsList() {
+  const deptsList = document.getElementById('departments-list');
+  if (!deptsList) return;
+  const depts = getDepts();
+  const canManage = hasPerm('dept.manage');
+  deptsList.innerHTML = depts.length ? depts.map((d, idx) => `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb">
+      <div style="width:28px;height:28px;background:${d.color};border-radius:5px;display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0">
+        <i class="ti ${d.icon||'ti-hexagon'}" style="font-size:13px"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:12px">${d.name}</div>
+        <div style="font-size:10px;color:#666">ID: ${d.id} &nbsp;·&nbsp; ${SERVICES.filter(s=>s.dept===d.id).length} service(s)</div>
+      </div>
+      ${canManage ? `
+        <button class="btn btn-sm btn-outline" onclick="editDepartmentUI(${idx})" title="Edit"><i class="ti ti-pencil"></i></button>
+        <button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:none;padding:4px 8px" onclick="deleteDepartment(${idx})" title="Delete"><i class="ti ti-trash"></i></button>
+      ` : ''}
+    </div>
+  `).join('') : '<div style="font-size:11px;color:var(--muted);text-align:center;padding:10px">No departments yet. Add one below.</div>';
+}
+
+function addDepartmentUI() {
+  document.getElementById('dept-modal-title').textContent = 'Add Department';
+  document.getElementById('dept-edit-idx').value = '';
+  document.getElementById('dept-name-in').value = '';
+  document.getElementById('dept-icon-in').value = 'ti-hexagon';
+  const defaultColor = '#7c3aed';
+  document.getElementById('dept-color-in').value = defaultColor;
+  document.getElementById('dept-color-preview').style.background = defaultColor;
+  document.getElementById('dept-icon-preview').style.background = defaultColor;
+  document.getElementById('dept-modal').classList.add('show');
+}
+
+function editDepartmentUI(idx) {
+  const depts = getDepts();
+  const d = depts[idx];
+  if (!d) return;
+  document.getElementById('dept-modal-title').textContent = 'Edit Department';
+  document.getElementById('dept-edit-idx').value = String(idx);
+  document.getElementById('dept-name-in').value = d.name;
+  document.getElementById('dept-icon-in').value = d.icon || 'ti-hexagon';
+  document.getElementById('dept-color-in').value = d.color || '#7c3aed';
+  document.getElementById('dept-color-preview').style.background = d.color || '#7c3aed';
+  document.getElementById('dept-icon-preview').style.background = d.color || '#7c3aed';
+  document.getElementById('dept-modal').classList.add('show');
+}
+
+function saveDepartmentModal() {
+  const name = document.getElementById('dept-name-in').value.trim();
+  if (!name) { alert('Please enter a department name.'); return; }
+  const icon = document.getElementById('dept-icon-in').value || 'ti-hexagon';
+  const color = document.getElementById('dept-color-in').value || '#7c3aed';
+  const editIdxStr = document.getElementById('dept-edit-idx').value;
+  const depts = getDepts();
+
+  if (editIdxStr !== '') {
+    const idx = parseInt(editIdxStr, 10);
+    depts[idx] = { ...depts[idx], name, icon, color };
+  } else {
+    depts.push({ id: 'dept_' + Date.now(), name, icon, color });
+  }
+  SETTINGS.departments = depts;
+  DEPTS = depts;
+  closeModal('dept-modal');
+  saveSettings();
+}
+
+function deleteDepartment(idx) {
+  if (!confirm('Delete this department? All services in this department will also be removed.')) return;
+  const depts = getDepts();
+  const deletedDeptId = depts[idx]?.id;  // capture BEFORE splice
+  depts.splice(idx, 1);
+  SETTINGS.departments = depts;
+  DEPTS = depts;
+  if (deletedDeptId) {
+    SERVICES = SERVICES.filter(s => s.dept !== deletedDeptId);
+  }
+  saveSettings();
 }
 
 function handleLogoUpload(input) {
@@ -3614,6 +3823,7 @@ async function removeLogo() {
   SETTINGS.logoDataUrl = '';
   await persistShopSettings();
   renderSettings();
+  setTimeout(renderDepartmentsList, 10);
 }
 
 // ── SERVICES MANAGEMENT ──────────────────────────────────
@@ -3714,6 +3924,7 @@ function saveService() {
   } else {
     SERVICES.push({ id: 'svc-' + uid(), dept, name, desc, price });
   }
+  persistShopSettings();
   closeModal('service-modal');
   renderServices();
 }
@@ -3722,6 +3933,7 @@ function deleteService(id) {
   if (!confirm('Delete this service? Existing invoices are unaffected.')) return;
   const idx = SERVICES.findIndex(s => s.id === id);
   if (idx !== -1) SERVICES.splice(idx, 1);
+  persistShopSettings();
   renderServices();
 }
 
