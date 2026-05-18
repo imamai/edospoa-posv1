@@ -1306,7 +1306,7 @@ let INVENTORY = (() => {
 // ── SETTINGS object — persisted to localStorage ─────────
 const SETTINGS_DEFAULTS = {
   logoDataUrl: '',
-  vatRate: 16,
+  vatRate: 0,
   bizName: 'Mejason Media Production',
   bizLocation: 'Joventure Hotel, 1st Floor, Kibos Rd, Kisumu',
   bizPhone1: '+254 700 864849',
@@ -1633,7 +1633,7 @@ function renderPOS() {
         <div class="cart-foot">
           <div class="cf-row"><span>Subtotal</span><span id="cf-sub">KSh 0</span></div>
           <div class="cf-row"><span>Discount</span><span id="cf-disc" style="color:var(--green)">- KSh 0</span></div>
-          <div class="cf-row" id="cf-vat-row"><span id="cf-vat-lbl">VAT (16%)</span><span id="cf-vat">KSh 0</span></div>
+
           <div class="cf-total"><span>Total</span><span id="cf-total" style="color:var(--red)">KSh 0</span></div>
           <div id="cf-balance-row" style="display:none;justify-content:space-between;font-size:11px;font-weight:600;color:#dc2626;padding:2px 0 6px"><span>Balance Due</span><span id="cf-balance">KSh 0</span></div>
           <div style="margin-bottom:8px">
@@ -1782,14 +1782,11 @@ function recalc() {
   const sub = cart.reduce((a, c) => a + c.price * c.qty, 0);
   const disc = Math.min(parseFloat(document.getElementById('disc-pct')?.value) || 0, 100);
   const da = sub * disc / 100;
-  const vatRate = SETTINGS.vatRate ?? 16;
-  const vatAmt = (sub - da) * vatRate / 100;
-  const total = sub - da + vatAmt;
+  const vatRate = 0;
+  const vatAmt = 0;
+  const total = sub - da;
   const s = document.getElementById('cf-sub'); if (s) s.textContent = fmt(sub);
   const ds = document.getElementById('cf-disc'); if (ds) ds.textContent = '- ' + fmt(da);
-  const vl = document.getElementById('cf-vat-lbl'); if (vl) vl.textContent = `VAT (${vatRate}%)`;
-  const vs = document.getElementById('cf-vat'); if (vs) vs.textContent = fmt(vatAmt);
-  const vr = document.getElementById('cf-vat-row'); if (vr) vr.style.display = vatRate > 0 ? 'flex' : 'none';
   const t = document.getElementById('cf-total'); if (t) t.textContent = fmt(total);
   return { sub, da, vatRate, vatAmt, total, disc };
 }
@@ -3642,12 +3639,8 @@ function renderSettings() {
           <div><label>Account Holder</label><input id="set-bankHolder" value="${s.bankHolder}" placeholder="Account holder name"/></div>
           <div><label>Branch</label><input id="set-bankBranch" value="${s.bankBranch}" placeholder="e.g. Kisumu"/></div>
           <div><label>KRA PIN (Kenya)</label><input id="set-kraPin" value="${s.kraPin}" placeholder="e.g. A123456789ABC"/></div>
-          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end">
-            <div><label>VAT Rate (%)</label><input type="number" id="set-vatRate" value="${s.vatRate ?? 16}" min="0" max="100" step="0.01" placeholder="e.g. 16"/></div>
-            <div style="padding-bottom:1px;font-size:11px;color:var(--muted);white-space:nowrap">${(s.vatRate ?? 16) === 0 ? 'VAT disabled' : `${s.vatRate ?? 16}% applied to invoices`}</div>
-          </div>
           <div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
-            <i class="ti ti-info-circle"></i> Bank details and KRA PIN will appear on invoices and quotations. Set VAT to 0 to disable it for this shop.
+            <i class="ti ti-info-circle"></i> Bank details and KRA PIN will appear on invoices and quotations.
           </div>
         </div>
       </div>
@@ -3713,8 +3706,7 @@ async function saveSettings() {
     const el = document.getElementById('set-' + k);
     if (el) SETTINGS[k] = el.value.trim();
   });
-  const vatEl = document.getElementById('set-vatRate');
-  if (vatEl) SETTINGS.vatRate = Math.max(0, Math.min(100, parseFloat(vatEl.value) || 0));
+  SETTINGS.vatRate = 0;
   DEPTS = getDepts();  // Update DEPTS after saving
   await persistShopSettings();
   const msg = document.getElementById('settings-saved-msg');
