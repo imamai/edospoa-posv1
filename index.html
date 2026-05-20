@@ -237,15 +237,33 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px}
     </div>
     <details style="margin-bottom:16px">
       <summary style="cursor:pointer;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:8px">Show SQL to run in Supabase</summary>
-      <pre style="background:#1e2235;color:#c8cad8;border-radius:8px;padding:12px;font-size:10px;overflow-x:auto;margin-top:8px;line-height:1.6">create table if not exists clients (id text primary key, name text, phone text, email text, event text, notes text, created_at text);
-create table if not exists invoices (id text primary key, data jsonb, created_at timestamp default now());
-create table if not exists payments (id text primary key, invoice_id text, amount numeric, method text, note text, paid_at text);
+      <pre style="background:#1e2235;color:#c8cad8;border-radius:8px;padding:12px;font-size:10px;overflow-x:auto;margin-top:8px;line-height:1.6">-- Core tables
+create table if not exists clients (id text primary key, shop_id text, name text, phone text, email text, event text, notes text, created_at text);
+create table if not exists invoices (id text primary key, shop_id text, type text default 'invoice', quotation_ref text, data jsonb, created_at timestamp default now());
+create table if not exists payments (id text primary key, shop_id text, invoice_id text, amount numeric, method text, note text, paid_at text);
+create table if not exists pos_shop_settings (shop_id text primary key, settings jsonb, updated_at timestamp);
+
+-- Migrate existing rows (run if upgrading)
+alter table invoices add column if not exists type text default 'invoice';
+alter table invoices add column if not exists quotation_ref text;
+alter table invoices add column if not exists shop_id text;
+alter table clients add column if not exists shop_id text;
+alter table payments add column if not exists shop_id text;
+
+-- Enable RLS on all tables
 alter table clients enable row level security;
 alter table invoices enable row level security;
 alter table payments enable row level security;
-create policy "allow all" on clients for all using (true) with check (true);
-create policy "allow all" on invoices for all using (true) with check (true);
-create policy "allow all" on payments for all using (true) with check (true);</pre>
+alter table pos_shop_settings enable row level security;
+
+-- Per-shop isolation policies (anon key; app passes shop_id in every query)
+drop policy if exists "allow all" on clients;
+drop policy if exists "allow all" on invoices;
+drop policy if exists "allow all" on payments;
+create policy "shop_clients" on clients for all using (true) with check (true);
+create policy "shop_invoices" on invoices for all using (true) with check (true);
+create policy "shop_payments" on payments for all using (true) with check (true);
+create policy "shop_settings" on pos_shop_settings for all using (true) with check (true);</pre>
     </details>
     <div style="display:grid;gap:10px;margin-bottom:16px">
       <div><label>Supabase Project URL</label><input id="sb-url" placeholder="https://xxxxxxxxxxxx.supabase.co"/></div>
@@ -493,6 +511,64 @@ create policy "allow all" on payments for all using (true) with check (true);</p
     </div>
   </div>
 
+  <!-- Edit Invoice / Quotation Modal -->
+  <div class="modal-bg" id="edit-inv-modal" onclick="if(event.target===this)closeModal('edit-inv-modal')">
+    <div class="modal" style="width:740px;max-width:96vw;max-height:92vh;overflow-y:auto">
+      <div class="modal-hdr">
+        <span><i class="ti ti-pencil" style="color:var(--blue)"></i> Edit <span id="edit-inv-type-lbl">Invoice</span> &nbsp;<span id="edit-inv-num" style="font-family:monospace;font-size:11px;color:var(--muted)"></span></span>
+        <button class="btn btn-outline btn-sm" onclick="closeModal('edit-inv-modal')"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:18px;display:grid;gap:12px">
+        <input type="hidden" id="edit-inv-id"/>
+        <div class="two-col">
+          <div><label>Client Name *</label><input id="edit-inv-client" placeholder="Client name"/></div>
+          <div><label>Phone</label><input id="edit-inv-phone" placeholder="+254 7XX XXX XXX"/></div>
+        </div>
+        <div class="two-col">
+          <div><label>Email</label><input id="edit-inv-email" placeholder="client@email.com"/></div>
+          <div><label>Event Date</label><input type="date" id="edit-inv-event"/></div>
+        </div>
+        <div class="two-col">
+          <div><label>Discount (%)</label><input type="number" id="edit-inv-discount" placeholder="0" min="0" max="100" oninput="_refreshEditTotals()"/></div>
+          <div><label>Internal Note</label><input id="edit-inv-note" placeholder="Optional note (not shown on document)"/></div>
+        </div>
+
+        <!-- Add item: department → service -->
+        <div>
+          <label style="margin-bottom:6px">Add Service</label>
+          <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
+            <select id="edit-inv-dept-pick" onchange="_onEditDeptPick()" style="flex:1;min-width:140px">
+              <option value="">— Pick department —</option>
+            </select>
+            <select id="edit-inv-svc-pick" style="flex:2;min-width:180px" disabled>
+              <option value="">— Pick service —</option>
+            </select>
+            <button class="btn btn-red btn-sm" onclick="_addEditItemFromPick()" style="white-space:nowrap"><i class="ti ti-plus"></i> Add</button>
+          </div>
+        </div>
+
+        <!-- Items table -->
+        <div>
+          <label style="margin-bottom:6px">Line Items</label>
+          <div style="overflow-x:auto">
+            <table class="table" style="width:100%;min-width:440px">
+              <thead><tr><th>Description</th><th style="width:80px">Dept</th><th style="width:60px">Qty</th><th style="width:110px">Unit Price (KSh)</th><th style="width:36px"></th></tr></thead>
+              <tbody id="edit-inv-items"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Running totals -->
+        <div id="edit-inv-totals" style="background:#f8f8f6;border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;display:grid;gap:4px"></div>
+
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-red" style="flex:1;justify-content:center" onclick="saveEditedInvoice()"><i class="ti ti-check"></i> Save Changes</button>
+          <button class="btn btn-outline" onclick="closeModal('edit-inv-modal')">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Inventory Item Modal -->
   <div class="modal-bg" id="inv-item-modal">
     <div class="modal" style="width:440px">
@@ -546,6 +622,7 @@ const SUPABASE_CONFIG = {
   url: 'https://cnlyuwslpcgosgwdmzav.supabase.co',
   key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNubHl1d3NscGNnb3Nnd2RtemF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgyMjIxMjUsImV4cCI6MjA5Mzc5ODEyNX0.eYYuQLqWWLf61JFE0BpDqDu9LB7cX4CoW6E1P5xmMto'
 };
+
 
 window.onload = () => {
   // Auto-connect to Supabase with hardcoded credentials
@@ -1327,6 +1404,7 @@ const SETTINGS_DEFAULTS = {
   paymentInstructions: 'KCB Bank — Account 1310465029\nM-Pesa Till — 9013189',
   invoiceFootnote: 'We Deliver Quality.',
   quotationTerms: '• This quotation is valid for 30 days from the date above\n• Price subject to change if event date or requirements change\n• Confirm this quote and provide 50% deposit to secure the date\n• Final balance due 7 days before event date',
+  invoiceTerms: '• Payment is due within 30 days of invoice date\n• A 1.5% monthly finance charge applies on overdue balances\n• Please reference the invoice number on your payment\n• Disputes must be raised within 7 days of invoice date',
   departments: [
     { id: 'wedding',    name: 'Wedding',    icon: 'ti-heart',    color: '#C8252A' },
     { id: 'traditional',name: 'Traditional',icon: 'ti-palette',  color: '#d97706' },
@@ -1382,7 +1460,7 @@ async function persistShopSettings() {
 
 // State
 let cart = [], payMethod = 'cash', invoices = [], clients = [], payments = [];
-let activeDept = 'all', invFilter = 'all', invSearch = '', clientSearch = '';
+let activeDept = 'all', invFilter = 'all', invTypeFilter = 'all', invSearch = '', clientSearch = '';
 let activePeriod = 'all', mpesaPhone = '';
 let periodFrom = '', periodTo = '';
 let svcSearch = '', svcDeptFilter = 'all';
@@ -1512,32 +1590,37 @@ function filterByPeriod(invList) {
 
 // ── DASHBOARD ────────────────────────────────────────────
 function renderDashboard() {
-  const total   = invoices.reduce((a, i) => a + i.total, 0);
-  const unpaid  = invoices.filter(i => invStatus(i) === 'Unpaid').reduce((a, i) => a + invBalance(i), 0);
-  const partial = invoices.filter(i => invStatus(i) === 'Partial').reduce((a, i) => a + invBalance(i), 0);
-  const paid    = invoices.filter(i => invStatus(i) === 'Paid').reduce((a, i) => a + i.total, 0);
+  const invOnly  = invoices.filter(i => i.type !== 'quotation');
+  const qtOnly   = invoices.filter(i => i.type === 'quotation');
+  const total    = invOnly.reduce((a, i) => a + i.total, 0);
+  const unpaid   = invOnly.filter(i => invStatus(i) === 'Unpaid').reduce((a, i) => a + invBalance(i), 0);
+  const partial  = invOnly.filter(i => invStatus(i) === 'Partial').reduce((a, i) => a + invBalance(i), 0);
+  const paid     = invOnly.filter(i => invStatus(i) === 'Paid').reduce((a, i) => a + i.total, 0);
   const todayStr = new Date().toLocaleDateString('en-KE', {day:'2-digit', month:'short', year:'numeric'});
-  const todayInvs = invoices.filter(i => i.date === todayStr);
+  const todayInvs = invOnly.filter(i => i.date === todayStr);
   const todayRev  = todayInvs.reduce((a, i) => a + i.total, 0);
   const deptTotals = {};
-  invoices.forEach(inv => inv.items.forEach(item => {
+  invOnly.forEach(inv => inv.items.forEach(item => {
     deptTotals[item.dept] = (deptTotals[item.dept] || 0) + item.price * item.qty;
   }));
+  const qtPending   = qtOnly.filter(i => i.status === 'Pending');
+  const qtPendingVal = qtPending.reduce((a, i) => a + i.total, 0);
   document.getElementById('page-dashboard').innerHTML = `
     <div class="stats-grid">
-      <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Total Billed</div><div class="stat-value">${fmt(total)}</div><div class="stat-sub">${invoices.length} invoices</div></div>
+      <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Total Billed</div><div class="stat-value">${fmt(total)}</div><div class="stat-sub">${invOnly.length} invoices</div></div>
       <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Collected</div><div class="stat-value">${fmt(paid)}</div><div class="stat-sub">Fully paid</div></div>
       <div class="stat-card" style="border-top-color:var(--amber)"><div class="stat-label">Partial Balance</div><div class="stat-value">${fmt(partial)}</div><div class="stat-sub">Ongoing credit</div></div>
       <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Outstanding</div><div class="stat-value">${fmt(unpaid)}</div><div class="stat-sub">No payment yet</div></div>
       <div class="stat-card" style="border-top-color:var(--blue)"><div class="stat-label">Today's Sales</div><div class="stat-value">${fmt(todayRev)}</div><div class="stat-sub">${todayInvs.length} txns</div></div>
+      <div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">Pending Quotations</div><div class="stat-value">${fmt(qtPendingVal)}</div><div class="stat-sub">${qtPending.length} open · ${qtOnly.length} total</div></div>
     </div>
     <div class="two-col" style="margin-bottom:14px">
       <div class="card">
-        <div class="card-title"><i class="ti ti-receipt" style="color:var(--red)"></i> Recent Transactions</div>
+        <div class="card-title"><i class="ti ti-receipt" style="color:var(--red)"></i> Recent Invoices</div>
         <table class="table"><thead><tr><th>Invoice</th><th>Client</th><th>Amount</th><th>Balance</th><th>Status</th></tr></thead>
-        <tbody>${!invoices.length
-          ? '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:16px">No transactions yet</td></tr>'
-          : [...invoices].reverse().slice(0, 8).map(i => {
+        <tbody>${!invOnly.length
+          ? '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:16px">No invoices yet</td></tr>'
+          : [...invOnly].reverse().slice(0, 8).map(i => {
               const st = invStatus(i); const bal = invBalance(i);
               return `<tr onclick="openInvoice('${i.id}')" style="cursor:pointer">
                 <td style="color:var(--muted);font-size:10px">${i.id}</td>
@@ -1654,6 +1737,7 @@ function renderPOS() {
             </div>
           </div>
           <button class="btn btn-red" style="width:100%;justify-content:center;font-size:13px" onclick="checkout()"><i class="ti ti-check"></i> Complete Sale &amp; Invoice</button>
+          <button class="btn btn-amber" style="width:100%;justify-content:center;font-size:13px;margin-top:6px" onclick="checkoutAsQuotation()"><i class="ti ti-file-text"></i> Save as Quotation</button>
         </div>
       </div>
     </div>`;
@@ -1846,8 +1930,10 @@ async function checkout() {
   const amountPaid = (cartPaidAmt > 0 && cartPaidAmt < total) ? cartPaidAmt : total;
   const isPartial = amountPaid < total;
 
+  const invCount = invoices.filter(i => i.type !== 'quotation').length;
   const inv = {
-    id: 'MMP-' + String(invoices.length + 301).padStart(3, '0'),
+    id: 'MMP-' + String(invCount + 301).padStart(3, '0'),
+    type: 'invoice',
     clientName, clientPhone, clientEmail: clientEmail || '',
     clientWhatsApp: clientWA || '', clientId: clientSel || null,
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
@@ -1972,6 +2058,37 @@ async function finalizeInvoice(inv) {
   cart = [];
   mpesaPhone = '';
   showInvoice(inv.id);
+  renderDashboard();
+}
+
+async function checkoutAsQuotation() {
+  if (!cart.length) { alert('Cart is empty.'); return; }
+  if (!hasPerm('inv.create')) { alert('You do not have permission to create quotations.'); return; }
+  const { sub, da, vatRate, vatAmt, total, disc } = recalc();
+  const clientSel   = document.getElementById('cart-client')?.value;
+  let   clientName  = document.getElementById('cart-cname')?.value.trim();
+  const clientPhone = document.getElementById('cart-cphone')?.value.trim();
+  const clientEmail = document.getElementById('cart-cemail')?.value.trim();
+  const eventDate   = document.getElementById('cart-date')?.value;
+  if (!clientName) clientName = 'Walk-in #' + uid();
+  const qtCount = invoices.filter(i => i.type === 'quotation').length;
+  const qt = {
+    id: 'QT-' + String(qtCount + 101).padStart(3, '0'),
+    type: 'quotation',
+    clientName, clientPhone, clientEmail: clientEmail || '',
+    clientId: clientSel || null,
+    items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
+    vatRate, vatAmt, total,
+    payMethod: 'quotation', status: 'Pending',
+    date: dateStr(), time: timeStr(), eventDate: eventDate || dateStr(),
+    cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
+  };
+  invoices.push(qt);
+  await dbInsertInvoice(qt);
+  cart = [];
+  mpesaPhone = '';
+  renderPOS();
+  showInvoice(qt.id);
   renderDashboard();
 }
 
@@ -2102,6 +2219,10 @@ function buildInvoiceHTML(inv) {
       ${S.paymentInstructions.split('\n').map(line => line.trim()).filter(Boolean).join('<br/>')}<br/>
       Email &mdash; ${S.email}
     </div>
+    ${S.invoiceTerms ? `<div class="inv-pay-instructions" style="margin-top:8px">
+      <strong>Terms &amp; Conditions</strong>
+      ${S.invoiceTerms.split('\n').map(line => line.trim()).filter(Boolean).join('<br/>')}
+    </div>` : ''}
     <div class="inv-sig">
       <div class="inv-sig-block">
         <div class="inv-sig-label">Authorized By</div>
@@ -2292,12 +2413,19 @@ function openInvoice(id) { showInvoice(id); }
 function showInvoice(idOrInv) {
   const inv = typeof idOrInv === 'string' ? invoices.find(i => i.id === idOrInv) : idOrInv;
   if (!inv) return;
-  const pays = invPayments(inv.id);
+  const isQuotation = inv.type === 'quotation';
+  const pays = isQuotation ? [] : invPayments(inv.id);
   const totalPaid = pays.reduce((a, p) => a + p.amount, 0);
   const balance = inv.total - totalPaid;
-  const status = invStatus(inv);
+  const status = isQuotation ? inv.status : invStatus(inv);
 
-  const payHistoryHTML = pays.length ? `
+  // Update modal header title to reflect document type
+  const modalHdr = document.querySelector('#inv-modal .modal-hdr span');
+  if (modalHdr) modalHdr.innerHTML = isQuotation
+    ? '<i class="ti ti-file-text" style="color:#d97706"></i> Quotation Details'
+    : '<i class="ti ti-file-invoice" style="color:var(--red)"></i> Invoice Details';
+
+  const payHistoryHTML = (!isQuotation && pays.length) ? `
     <div style="margin-top:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px">
       <div style="font-size:10px;font-weight:600;color:#166534;margin-bottom:6px;text-transform:uppercase">Payment History</div>
       ${pays.map(p => `<div class="pay-history-item">
@@ -2311,27 +2439,39 @@ function showInvoice(idOrInv) {
       ${balance > 0 ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:12px;font-weight:700;color:#dc2626"><span>Balance Due</span><span>${fmt(balance)}</span></div>` : ''}
     </div>` : '';
 
+  const convertedBanner = (isQuotation && inv.status === 'converted' && inv.invoiceRef)
+    ? `<div style="background:#dcfce7;border:1px solid #bbf7d0;border-radius:8px;padding:10px;margin-top:10px;font-size:12px;color:#166534"><i class="ti ti-circle-check"></i> Converted to Invoice <strong>${inv.invoiceRef}</strong></div>` : '';
+
   const waBtn = inv.clientWhatsApp
     ? `<button class="btn btn-sm btn-outline" onclick="sendInvoiceViaWhatsApp('${inv.id}','${inv.clientWhatsApp}')"><i class="ti ti-brand-whatsapp" style="color:#25d366"></i> WhatsApp</button>`
     : '';
-
   const emailBtn = inv.clientEmail
     ? `<button class="btn btn-sm btn-outline" onclick="sendInvoiceViaEmail('${inv.id}','${inv.clientEmail}','${inv.clientName}')"><i class="ti ti-mail" style="color:#ea4335"></i> Email</button>`
     : '';
 
+  const actionBar = isQuotation
+    ? `<div style="margin-top:16px;display:flex;gap:8px;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap">
+        <button class="btn btn-red btn-sm" onclick="downloadQuotationPDF('${inv.id}')"><i class="ti ti-pdf"></i> Quotation PDF</button>
+        ${emailBtn}${waBtn}
+        <button class="btn btn-outline btn-sm" onclick="window.print()"><i class="ti ti-printer"></i> Print</button>
+        ${hasPerm('inv.edit') ? `<button class="btn btn-outline btn-sm" onclick="openEditInvoice('${inv.id}')"><i class="ti ti-pencil"></i> Edit</button>` : ''}
+        ${inv.status !== 'converted' && hasPerm('inv.create') ? `<button class="btn btn-green btn-sm" onclick="convertQuotationToInvoice('${inv.id}')"><i class="ti ti-file-invoice"></i> Generate Invoice</button>` : ''}
+        ${hasPerm('inv.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteInvoice('${inv.id}');closeModal('inv-modal')"><i class="ti ti-trash"></i> Delete</button>` : ''}
+      </div>`
+    : `<div style="margin-top:16px;display:flex;gap:8px;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap">
+        <button class="btn btn-red btn-sm" onclick="downloadInvoicePDF('${inv.id}')"><i class="ti ti-pdf"></i> Invoice PDF</button>
+        <button class="btn btn-outline btn-sm" onclick="downloadReceiptPDF('${inv.id}')"><i class="ti ti-printer"></i> Receipt PDF</button>
+        ${emailBtn}${waBtn}
+        <button class="btn btn-outline btn-sm" onclick="window.print()"><i class="ti ti-printer"></i> Print</button>
+        ${hasPerm('inv.edit') ? `<button class="btn btn-outline btn-sm" onclick="openEditInvoice('${inv.id}')"><i class="ti ti-pencil"></i> Edit</button>` : ''}
+        ${balance > 0 && hasPerm('inv.record_payment') ? `<button class="btn btn-green btn-sm" onclick="openPaymentModal('${inv.id}')"><i class="ti ti-plus"></i> Record Payment</button>` : ''}
+        ${status === 'Unpaid' && hasPerm('inv.record_payment') ? `<button class="btn btn-amber btn-sm" onclick="markFullyPaid('${inv.id}')"><i class="ti ti-check"></i> Mark Paid</button>` : ''}
+        ${hasPerm('inv.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteInvoice('${inv.id}');closeModal('inv-modal')"><i class="ti ti-trash"></i> Delete</button>` : ''}
+      </div>`;
+
   document.getElementById('inv-modal-body').innerHTML =
-    buildInvoiceHTML(inv) +
-    payHistoryHTML +
-    `<div style="margin-top:16px;display:flex;gap:8px;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap">
-      <button class="btn btn-red btn-sm" onclick="downloadInvoicePDF('${inv.id}')"><i class="ti ti-pdf"></i> Invoice PDF</button>
-      <button class="btn btn-outline btn-sm" onclick="downloadQuotationPDF('${inv.id}')"><i class="ti ti-file-text"></i> Quotation PDF</button>
-      <button class="btn btn-outline btn-sm" onclick="downloadReceiptPDF('${inv.id}')"><i class="ti ti-printer"></i> Receipt PDF</button>
-      ${emailBtn}
-      ${waBtn}
-      <button class="btn btn-outline btn-sm" onclick="window.print()"><i class="ti ti-printer"></i> Print</button>
-      ${balance > 0 && hasPerm('inv.record_payment') ? `<button class="btn btn-green btn-sm" onclick="openPaymentModal('${inv.id}')"><i class="ti ti-plus"></i> Record Payment</button>` : ''}
-      ${status === 'Unpaid' && hasPerm('inv.record_payment') ? `<button class="btn btn-amber btn-sm" onclick="markFullyPaid('${inv.id}')"><i class="ti ti-check"></i> Mark Paid</button>` : ''}
-    </div>`;
+    (isQuotation ? buildQuotationHTML(inv) : buildInvoiceHTML(inv)) +
+    payHistoryHTML + convertedBanner + actionBar;
   openModal('inv-modal');
 }
 
@@ -2354,6 +2494,167 @@ async function downloadQuotationPDF(invId) {
   const el = document.createElement('div');
   el.innerHTML = buildQuotationHTML(inv);
   html2pdf().set({ margin:10, filename:'QT-'+inv.id+'-quotation.pdf', image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{orientation:'portrait',unit:'mm',format:'a4'} }).from(el).save();
+}
+
+// ── QUOTATION → INVOICE CONVERSION ──────────────────────
+async function convertQuotationToInvoice(qtId) {
+  const qt = invoices.find(i => i.id === qtId);
+  if (!qt || qt.type !== 'quotation') return;
+  if (qt.status === 'converted') { alert('This quotation has already been converted to an invoice.'); return; }
+  if (!confirm(`Generate invoice from quotation ${qtId} for ${qt.clientName}?`)) return;
+
+  const invCount = invoices.filter(i => i.type !== 'quotation').length;
+  const newInv = {
+    ...qt,
+    id: 'MMP-' + String(invCount + 301).padStart(3, '0'),
+    type: 'invoice',
+    payMethod: 'credit',
+    status: 'Unpaid',
+    quotationRef: qtId,
+    date: dateStr(), time: timeStr(),
+    cashier: currentUser.name,
+  };
+  invoices.push(newInv);
+  await dbInsertInvoice(newInv);
+
+  // Mark quotation as converted
+  qt.status = 'converted';
+  qt.invoiceRef = newInv.id;
+  await dbUpdateInvoice(qt);
+
+  closeModal('inv-modal');
+  renderInvoices();
+  showInvoice(newInv.id);
+}
+
+// ── EDIT INVOICE / QUOTATION ─────────────────────────────
+let _editInvItems = [];
+let _editInvId    = '';
+
+function openEditInvoice(id) {
+  const inv = invoices.find(i => i.id === id); if (!inv) return;
+  _editInvId    = id;
+  _editInvItems = JSON.parse(JSON.stringify(inv.items || []));
+
+  const isQt = inv.type === 'quotation';
+  document.getElementById('edit-inv-id').value       = id;
+  document.getElementById('edit-inv-client').value   = inv.clientName  || '';
+  document.getElementById('edit-inv-phone').value    = inv.clientPhone || '';
+  document.getElementById('edit-inv-email').value    = inv.clientEmail || '';
+  document.getElementById('edit-inv-event').value    = inv.eventDate   || '';
+  document.getElementById('edit-inv-discount').value = inv.discountPct || 0;
+  document.getElementById('edit-inv-note').value     = inv.note        || '';
+  document.getElementById('edit-inv-type-lbl').textContent = isQt ? 'Quotation' : 'Invoice';
+  document.getElementById('edit-inv-num').textContent      = id;
+  // Populate department dropdown
+  const deptSel = document.getElementById('edit-inv-dept-pick');
+  deptSel.innerHTML = '<option value="">— Pick department —</option>' +
+    DEPTS.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+  const svcSel = document.getElementById('edit-inv-svc-pick');
+  svcSel.innerHTML = '<option value="">— Pick service —</option>';
+  svcSel.disabled = true;
+
+  _renderEditItems();
+  closeModal('inv-modal');
+  document.getElementById('edit-inv-modal').classList.add('show');
+}
+
+function _renderEditItems() {
+  const tbody = document.getElementById('edit-inv-items'); if (!tbody) return;
+  tbody.innerHTML = _editInvItems.length
+    ? _editInvItems.map((item, idx) => `
+        <tr>
+          <td><input style="width:100%;min-width:120px" value="${(item.name||'').replace(/"/g,'&quot;')}" oninput="_editItemField(${idx},'name',this.value)"/></td>
+          <td style="font-size:11px;color:var(--muted);white-space:nowrap">${DEPTS.find(d=>d.id===item.dept)?.name||item.dept||'—'}</td>
+          <td><input type="number" style="width:56px" value="${item.qty||1}" min="1" oninput="_editItemField(${idx},'qty',+this.value||1)"/></td>
+          <td><input type="number" style="width:100px" value="${item.price||0}" min="0" step="0.01" oninput="_editItemField(${idx},'price',+this.value||0)"/></td>
+          <td><button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:none;padding:3px 7px" onclick="_removeEditItem(${idx})"><i class="ti ti-trash"></i></button></td>
+        </tr>`).join('')
+    : '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:14px;font-size:12px">No items — add one above</td></tr>';
+  _refreshEditTotals();
+}
+
+function _editItemField(idx, field, val) {
+  if (_editInvItems[idx] !== undefined) { _editInvItems[idx][field] = val; _refreshEditTotals(); }
+}
+
+function _removeEditItem(idx) {
+  _editInvItems.splice(idx, 1);
+  _renderEditItems();
+}
+
+function _refreshEditTotals() {
+  const disc = parseFloat(document.getElementById('edit-inv-discount')?.value) || 0;
+  const sub  = _editInvItems.reduce((a, it) => a + (+(it.price)||0) * (+(it.qty)||1), 0);
+  const da   = Math.round(sub * disc / 100);
+  const inv  = invoices.find(i => i.id === _editInvId);
+  const vr   = inv?.vatRate || 0;
+  const va   = Math.round((sub - da) * vr / 100);
+  const tot  = sub - da + va;
+  const el   = document.getElementById('edit-inv-totals'); if (!el) return;
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Subtotal</span><span>${fmt(sub)}</span></div>
+    ${disc ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Discount (${disc}%)</span><span style="color:#dc2626">- ${fmt(da)}</span></div>` : ''}
+    ${vr  ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">VAT (${vr}%)</span><span>${fmt(va)}</span></div>` : ''}
+    <div style="display:flex;justify-content:space-between;font-weight:700;font-size:14px;border-top:1px solid var(--border);margin-top:5px;padding-top:7px"><span>Total</span><span style="color:var(--red)">${fmt(tot)}</span></div>`;
+}
+
+function _onEditDeptPick() {
+  const deptId = document.getElementById('edit-inv-dept-pick').value;
+  const svcSel = document.getElementById('edit-inv-svc-pick');
+  if (!deptId) {
+    svcSel.innerHTML = '<option value="">— Pick service —</option>';
+    svcSel.disabled = true;
+    return;
+  }
+  const svcs = SERVICES.filter(s => s.dept === deptId);
+  svcSel.innerHTML = '<option value="">— Pick service —</option>' +
+    svcs.map(s => `<option value="${s.id}">${s.name} — ${fmt(s.price||0)}</option>`).join('');
+  svcSel.disabled = svcs.length === 0;
+}
+
+function _addEditItemFromPick() {
+  const svcId = document.getElementById('edit-inv-svc-pick').value;
+  if (!svcId) { alert('Please select a service first.'); return; }
+  const s = SERVICES.find(x => x.id === svcId); if (!s) return;
+  const existing = _editInvItems.find(x => x.id === s.id);
+  if (existing) { existing.qty = (+(existing.qty) || 1) + 1; }
+  else { _editInvItems.push({ id: s.id, name: s.name, price: s.price || 0, qty: 1, dept: s.dept || '' }); }
+  // Reset service picker but keep department selected so adding multiple services is quick
+  document.getElementById('edit-inv-svc-pick').value = '';
+  _renderEditItems();
+}
+
+async function saveEditedInvoice() {
+  const id = _editInvId;
+  const inv = invoices.find(i => i.id === id); if (!inv) return;
+  if (!_editInvItems.length) { alert('Add at least one item before saving.'); return; }
+
+  const discPct  = parseFloat(document.getElementById('edit-inv-discount').value) || 0;
+  const subtotal = _editInvItems.reduce((a, it) => a + (+(it.price)||0) * (+(it.qty)||1), 0);
+  const discAmt  = Math.round(subtotal * discPct / 100);
+  const vatAmt   = Math.round((subtotal - discAmt) * (inv.vatRate || 0) / 100);
+  const total    = subtotal - discAmt + vatAmt;
+
+  inv.clientName  = document.getElementById('edit-inv-client').value.trim() || inv.clientName;
+  inv.clientPhone = document.getElementById('edit-inv-phone').value.trim();
+  inv.clientEmail = document.getElementById('edit-inv-email').value.trim();
+  inv.eventDate   = document.getElementById('edit-inv-event').value;
+  inv.note        = document.getElementById('edit-inv-note').value.trim();
+  inv.items       = _editInvItems;
+  inv.dept        = [...new Set(_editInvItems.map(x => x.dept).filter(Boolean))];
+  inv.subtotal    = subtotal;
+  inv.discountPct = discPct;
+  inv.discountAmt = discAmt;
+  inv.vatAmt      = vatAmt;
+  inv.total       = total;
+
+  await dbUpdateInvoice(inv);
+  _editInvItems = [];
+  _editInvId    = '';
+  closeModal('edit-inv-modal');
+  renderInvoices();
+  showInvoice(id);
 }
 
 // ── PAYMENT MODAL ────────────────────────────────────────
@@ -2450,42 +2751,65 @@ async function sendInvoiceViaEmail(invId, email, clientName) {
 
 // ── INVOICES PAGE ────────────────────────────────────────
 function renderInvoices() {
-  let filtered = invoices;
+  // Department-based access control — restrict to user's assigned depts
+  const allowedDepts = currentUser?.allowedDepts || null;
+  let filtered = invoices.filter(i => {
+    if (!allowedDepts) return true;
+    return i.dept && i.dept.some(d => allowedDepts.includes(d));
+  });
+
+  // Type filter: invoices vs quotations
+  if (invTypeFilter === 'invoices')   filtered = filtered.filter(i => i.type !== 'quotation');
+  else if (invTypeFilter === 'quotations') filtered = filtered.filter(i => i.type === 'quotation');
+
+  // Status filter (only for invoices, not quotations)
   if (invFilter === 'paid')    filtered = filtered.filter(i => invStatus(i) === 'Paid');
   else if (invFilter === 'partial') filtered = filtered.filter(i => invStatus(i) === 'Partial');
   else if (invFilter === 'unpaid')  filtered = filtered.filter(i => invStatus(i) === 'Unpaid');
+
   if (invSearch) filtered = filtered.filter(i =>
     i.clientName.toLowerCase().includes(invSearch.toLowerCase()) ||
     i.id.toLowerCase().includes(invSearch.toLowerCase()) ||
     (i.clientPhone && i.clientPhone.includes(invSearch))
   );
+
+  const isQuotView = invTypeFilter === 'quotations';
   document.getElementById('page-invoices').innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
       <div style="display:flex;gap:5px;flex-wrap:wrap">
-        ${['all','paid','partial','unpaid'].map(f =>
-          `<button onclick="setInvFilter('${f}')" class="btn btn-sm ${invFilter === f ? 'btn-red' : 'btn-outline'}">${f.charAt(0).toUpperCase() + f.slice(1)}</button>`
-        ).join('')}
+        <button onclick="setInvTypeFilter('all')" class="btn btn-sm ${invTypeFilter==='all'?'btn-red':'btn-outline'}"><i class="ti ti-list"></i> All</button>
+        <button onclick="setInvTypeFilter('invoices')" class="btn btn-sm ${invTypeFilter==='invoices'?'btn-red':'btn-outline'}"><i class="ti ti-file-invoice"></i> Invoices</button>
+        <button onclick="setInvTypeFilter('quotations')" class="btn btn-sm ${invTypeFilter==='quotations'?'btn-amber':'btn-outline'}"><i class="ti ti-file-text"></i> Quotations</button>
       </div>
-      <div class="search-bar" style="width:220px;margin:0"><i class="ti ti-search"></i><input placeholder="Search invoices…" value="${invSearch}" oninput="invSearch=this.value;renderInvoices()"/></div>
+      <div class="search-bar" style="width:220px;margin:0"><i class="ti ti-search"></i><input placeholder="Search…" value="${invSearch}" oninput="invSearch=this.value;renderInvoices()"/></div>
     </div>
-    <div class="card"><div style="overflow-x:auto"><table class="table" style="width:100%;min-width:760px">
-      <thead><tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Total</th><th>Paid</th><th>Balance</th><th>Method</th><th>Status</th><th>Date</th><th></th></tr></thead>
+    ${invTypeFilter !== 'quotations' ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">
+      ${['all','paid','partial','unpaid'].map(f =>
+        `<button onclick="setInvFilter('${f}')" class="btn btn-sm ${invFilter===f?'btn-red':'btn-outline'}">${f.charAt(0).toUpperCase()+f.slice(1)}</button>`
+      ).join('')}
+    </div>` : ''}
+    <div class="card"><div style="overflow-x:auto"><table class="table" style="width:100%;min-width:780px">
+      <thead><tr><th>Number</th><th>Type</th><th>Client</th><th>Phone</th><th>Total</th>${isQuotView ? '' : '<th>Paid</th><th>Balance</th>'}<th>Status</th><th>Dept</th><th>Date</th><th></th></tr></thead>
       <tbody>${!filtered.length
-        ? '<tr><td colspan="10" style="color:var(--muted);text-align:center;padding:16px">No invoices found</td></tr>'
+        ? `<tr><td colspan="${isQuotView ? 9 : 11}" style="color:var(--muted);text-align:center;padding:16px">No ${isQuotView ? 'quotations' : 'invoices'} found</td></tr>`
         : [...filtered].reverse().map(i => {
-            const st = invStatus(i); const paid = invPaid(i); const bal = invBalance(i);
+            const isQt = i.type === 'quotation';
+            const st = isQt ? i.status : invStatus(i);
+            const paid = invPaid(i); const bal = invBalance(i);
+            const stClass = st==='Paid'||st==='converted'?'badge-green':st==='Partial'?'badge-amber':st==='Pending'?'badge-blue':'badge-red';
+            const deptNames = (i.dept||[]).map(d => (DEPTS.find(x=>x.id===d)||{name:d}).name).join(', ');
             return `<tr style="cursor:pointer" onclick="openInvoice('${i.id}')">
-              <td style="color:var(--muted);font-size:10px">${i.id}</td>
+              <td style="color:var(--muted);font-size:10px;font-family:monospace">${i.id}</td>
+              <td><span class="badge ${isQt?'badge-amber':'badge-blue'}">${isQt?'Quotation':'Invoice'}</span></td>
               <td style="font-weight:500">${i.clientName}</td>
               <td style="color:var(--muted);font-size:10px">${i.clientPhone || '—'}</td>
               <td style="font-weight:600">${fmt(i.total)}</td>
-              <td style="color:var(--green);font-weight:500">${fmt(paid)}</td>
-              <td style="color:${bal > 0 ? '#dc2626' : 'var(--green)'};font-weight:${bal > 0 ? '600' : '400'}">${fmt(bal)}</td>
-              <td style="text-transform:uppercase;font-size:10px">${i.payMethod}</td>
-              <td><span class="badge ${st==='Paid'?'badge-green':st==='Partial'?'badge-amber':'badge-red'}">${st}</span></td>
+              ${isQuotView ? '' : `<td style="color:var(--green);font-weight:500">${fmt(paid)}</td><td style="color:${bal>0?'#dc2626':'var(--green)'};font-weight:${bal>0?'600':'400'}">${fmt(bal)}</td>`}
+              <td><span class="badge ${stClass}">${st}</span></td>
+              <td style="font-size:10px;color:var(--muted)">${deptNames||'—'}</td>
               <td style="color:var(--muted);font-size:10px">${i.date}</td>
               <td onclick="event.stopPropagation()" style="white-space:nowrap">
-                ${bal > 0 && hasPerm('inv.record_payment') ? `<button class="btn btn-sm btn-green" onclick="openPaymentModal('${i.id}')" style="margin-right:3px"><i class="ti ti-plus"></i></button>` : ''}
+                ${!isQt && bal > 0 && hasPerm('inv.record_payment') ? `<button class="btn btn-sm btn-green" onclick="openPaymentModal('${i.id}')" style="margin-right:3px"><i class="ti ti-plus"></i></button>` : ''}
                 ${hasPerm('inv.delete') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="deleteInvoice('${i.id}')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>` : ''}
               </td>
             </tr>`;
@@ -2494,6 +2818,7 @@ function renderInvoices() {
     </table></div></div>`;
 }
 function setInvFilter(f) { invFilter = f; renderInvoices(); }
+function setInvTypeFilter(f) { invTypeFilter = f; invFilter = 'all'; renderInvoices(); }
 
 // ── CLIENTS ──────────────────────────────────────────────
 function renderClients() {
@@ -2535,7 +2860,7 @@ function renderClients() {
             <tbody>
               ${list.map(c => {
                 const initials = c.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-                const cInvs = invoices.filter(i => i.clientPhone === c.phone || i.clientId === c.id);
+                const cInvs = invoices.filter(i => i.type !== 'quotation' && (i.clientPhone === c.phone || i.clientId === c.id));
                 const total = cInvs.reduce((a, i) => a + i.total, 0);
                 const balance = cInvs.reduce((a, i) => a + invBalance(i), 0);
                 const bdStr = c.birthday ? new Date(c.birthday + 'T00:00:00').toLocaleDateString('en-KE', {day:'2-digit',month:'short'}) : '—';
@@ -2727,7 +3052,7 @@ let bdayWindowDays = 7;
 let bdayCustomFrom = '', bdayCustomTo = '';
 
 function renderAnalytics() {
-  const filtered = filterByPeriod(invoices);
+  const filtered = filterByPeriod(invoices.filter(i => i.type !== 'quotation'));
   const total    = filtered.reduce((a, i) => a + i.total, 0);
   const unpaid   = filtered.filter(i => invStatus(i) === 'Unpaid').reduce((a, i) => a + invBalance(i), 0);
   const partial  = filtered.filter(i => invStatus(i) === 'Partial').reduce((a, i) => a + invBalance(i), 0);
@@ -2984,7 +3309,7 @@ function renderAnalytics() {
                 const bdObj = new Date(c.birthday + 'T00:00:00');
                 const bdStr = bdObj.toLocaleDateString('en-KE', { day:'2-digit', month:'short', year:'numeric' });
                 const age   = new Date().getFullYear() - bdObj.getFullYear();
-                const cInvs = invoices.filter(i => i.clientPhone === c.phone || i.clientId === c.id);
+                const cInvs = invoices.filter(i => i.type !== 'quotation' && (i.clientPhone === c.phone || i.clientId === c.id));
                 const cTotal = cInvs.reduce((a,i) => a+i.total, 0);
                 const tagColor = c.daysUntil === 0 ? '#ec4899' : c.daysUntil <= 3 ? '#f59e0b' : 'var(--muted)';
                 return `<tr>
@@ -3045,7 +3370,7 @@ function getFilteredBirthdays() {
 }
 
 function exportReportCSV() {
-  const filtered = filterByPeriod(invoices);
+  const filtered = filterByPeriod(invoices.filter(i => i.type !== 'quotation'));
   const rows = [['Invoice #','Date','Client','Phone','Departments','Items','Total (KSh)','Paid (KSh)','Balance (KSh)','Status','Payment Method']];
   filtered.forEach(inv => {
     const depts = [...new Set(inv.items.map(i => DEPTS.find(d=>d.id===i.dept)?.name||i.dept))].join('; ');
@@ -3059,7 +3384,7 @@ function exportReportCSV() {
 
 function exportReportXLSX() {
   if (typeof XLSX === 'undefined') { alert('Excel library not loaded. Please check your connection.'); return; }
-  const filtered = filterByPeriod(invoices);
+  const filtered = filterByPeriod(invoices.filter(i => i.type !== 'quotation'));
   const wb = XLSX.utils.book_new();
 
   // Sheet 1 — Invoice list
@@ -3103,7 +3428,7 @@ function exportReportXLSX() {
 
 function exportReportPDF() {
   const pLabel = periodFrom || periodTo ? `${periodFrom||'start'} to ${periodTo||'now'}` : 'All Time';
-  const filtered = filterByPeriod(invoices);
+  const filtered = filterByPeriod(invoices.filter(i => i.type !== 'quotation'));
   const total    = filtered.reduce((a,i)=>a+i.total,0);
   const collected= total - filtered.filter(i=>invStatus(i)==='Unpaid').reduce((a,i)=>a+invBalance(i),0)
                          - filtered.filter(i=>invStatus(i)==='Partial').reduce((a,i)=>a+invBalance(i),0);
@@ -3675,6 +4000,10 @@ function renderSettings() {
           <div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
             <i class="ti ti-info-circle"></i> This tagline appears at the bottom of every invoice and quotation PDF.
           </div>
+          <div><label>Invoice Terms &amp; Conditions</label><textarea id="set-invoiceTerms" style="font-family:monospace;font-size:12px;padding:8px;border:1px solid #ccc;border-radius:6px;min-height:90px;resize:vertical">${s.invoiceTerms||''}</textarea></div>
+          <div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
+            <i class="ti ti-info-circle"></i> Each line is one term. These appear on every invoice PDF. Edit at your own discretion — you are responsible for the legal accuracy of your terms.
+          </div>
           <div><label>Quotation Terms &amp; Conditions</label><textarea id="set-quotationTerms" style="font-family:monospace;font-size:12px;padding:8px;border:1px solid #ccc;border-radius:6px;min-height:90px;resize:vertical">${s.quotationTerms||''}</textarea></div>
           <div style="background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:10px;font-size:11px;color:#854d0e">
             <i class="ti ti-alert-triangle"></i> Each line is one term. These appear on every quotation PDF. Edit at your own discretion — you are responsible for the legal accuracy of your terms.
@@ -3702,7 +4031,7 @@ async function saveSettings() {
   const fields = ['bizName','bizLocation','bizPhone1','bizPhone2','bizPhone3',
     'mpesaPaybill','mpesaAccount','mpesaTill',
     'bankName','bankAccount','bankHolder','bankBranch','kraPin',
-    'facebook','instagram','email','website','paymentInstructions','invoiceFootnote','quotationTerms'];
+    'facebook','instagram','email','website','paymentInstructions','invoiceFootnote','invoiceTerms','quotationTerms'];
   fields.forEach(k => {
     const el = document.getElementById('set-' + k);
     if (el) SETTINGS[k] = el.value.trim();
