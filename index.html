@@ -216,8 +216,11 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px}
 .inv-pay-instructions{background:#fffdf5;border:1px solid #e8dfc0;border-radius:6px;padding:12px 16px;margin-top:18px;margin-bottom:22px;font-size:11px;color:#3a2d00;line-height:1.9}
 .inv-pay-instructions strong{display:block;margin-bottom:4px;font-size:12px;color:#1a1000}
 .inv-sig{display:grid;grid-template-columns:1fr 1fr;gap:48px;margin-bottom:22px}
-.inv-sig-label{font-size:10px;font-weight:700;color:#333;margin-bottom:36px}
-.inv-sig-line{border-top:1px solid #999;padding-top:6px;font-size:10px;color:#444}
+.inv-sig-block{display:flex;flex-direction:column}
+.inv-sig-label{font-size:10px;font-weight:700;color:#333;margin-bottom:6px}
+.inv-sig-space{height:44px;display:flex;align-items:flex-end;margin-bottom:0}
+.inv-sig-space img{max-height:42px;max-width:100%;object-fit:contain;object-position:bottom left}
+.inv-sig-line{border-top:1px solid #999;padding-top:6px;font-size:10px;color:#444;margin-top:0}
 .inv-footer-line{text-align:center;font-size:9px;color:#666;letter-spacing:.8px;padding-top:14px;border-top:1px solid #eee;text-transform:uppercase}
 .receipt-container{background:#fff;border-radius:0;padding:16px;max-width:320px;font-family:monospace;font-size:11px}
 .receipt-header{text-align:center;margin-bottom:14px;border-bottom:1px dashed var(--border);padding-bottom:12px}
@@ -1495,6 +1498,7 @@ let INVENTORY = (() => {
 // ── SETTINGS object — persisted to localStorage ─────────
 const SETTINGS_DEFAULTS = {
   logoDataUrl: '',
+  signatureDataUrl: '',
   vatRate: 0,
   // Document ID prefix used for invoices/quotations/receipts. When left
   // blank the app auto-derives initials from the shop name (Mejason Media
@@ -2526,10 +2530,14 @@ function buildInvoiceHTML(inv) {
     <div class="inv-sig">
       <div class="inv-sig-block">
         <div class="inv-sig-label">Authorized By</div>
+        <div class="inv-sig-space">
+          ${S.signatureDataUrl ? `<img src="${S.signatureDataUrl}"/>` : ''}
+        </div>
         <div class="inv-sig-line">${inv.cashier}</div>
       </div>
       <div class="inv-sig-block">
         <div class="inv-sig-label">Client Signature</div>
+        <div class="inv-sig-space"></div>
         <div class="inv-sig-line">Date: ___________</div>
       </div>
     </div>
@@ -2649,10 +2657,14 @@ function buildQuotationHTML(inv) {
     <div class="inv-sig">
       <div class="inv-sig-block">
         <div class="inv-sig-label">Prepared By</div>
+        <div class="inv-sig-space">
+          ${S.signatureDataUrl ? `<img src="${S.signatureDataUrl}"/>` : ''}
+        </div>
         <div class="inv-sig-line">${inv.cashier}</div>
       </div>
       <div class="inv-sig-block">
         <div class="inv-sig-label">Client Acceptance</div>
+        <div class="inv-sig-space"></div>
         <div class="inv-sig-line">Signature: ___________  Date: ___________</div>
       </div>
     </div>
@@ -5108,6 +5120,27 @@ function renderSettings() {
               <span style="font-size:10px;color:#aaa;line-height:1.7">PNG, JPG or SVG<br/>Max 2 MB<br/>Best: 200 × 80 px</span>
             </div>
           </div>
+          <div>
+            <label>E-Signature <span style="font-size:10px;font-weight:400;color:var(--muted)">(Appears on invoices &amp; quotations)</span></label>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:6px">
+              <div id="sig-preview" style="width:130px;height:56px;border:1.5px dashed #ccc;border-radius:6px;display:flex;align-items:center;justify-content:center;background:#fafafa;overflow:hidden;flex-shrink:0">
+                ${s.signatureDataUrl
+                  ? '<img src="' + s.signatureDataUrl + '" style="max-height:52px;max-width:126px;object-fit:contain"/>'
+                  : '<span style="font-size:10px;color:#bbb;text-align:center;line-height:1.5">No<br/>signature</span>'}
+              </div>
+              <div style="display:grid;gap:6px">
+                <label class="btn btn-outline btn-sm" style="cursor:pointer;margin:0;display:inline-flex;align-items:center;gap:6px">
+                  <i class="ti ti-upload"></i> Upload Signature
+                  <input type="file" accept="image/*" style="display:none" onchange="handleSignatureUpload(this)"/>
+                </label>
+                <button class="btn btn-sm" id="sig-remove-btn" onclick="removeSignature()"
+                  style="background:#fee2e2;color:#dc2626;border:none;${s.signatureDataUrl ? '' : 'display:none'}">
+                  <i class="ti ti-trash"></i> Remove
+                </button>
+              </div>
+              <span style="font-size:10px;color:#aaa;line-height:1.7">PNG transparent<br/>background best<br/>Max 1 MB</span>
+            </div>
+          </div>
           <div><label>Business Name</label><input id="set-bizName" value="${s.bizName}"/></div>
           <div><label>Location</label><input id="set-bizLocation" value="${s.bizLocation}"/></div>
           <div><label>Phone 1</label><input id="set-bizPhone1" value="${s.bizPhone1}"/></div>
@@ -5316,6 +5349,29 @@ function handleLogoUpload(input) {
 
 async function removeLogo() {
   SETTINGS.logoDataUrl = '';
+  await persistShopSettings();
+  renderSettings();
+  setTimeout(renderDepartmentsList, 10);
+}
+
+function handleSignatureUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (file.size > 1024 * 1024) { alert('Signature image must be under 1 MB.'); return; }
+  const reader = new FileReader();
+  reader.onload = async e => {
+    SETTINGS.signatureDataUrl = e.target.result;
+    await persistShopSettings();
+    const preview = document.getElementById('sig-preview');
+    if (preview) preview.innerHTML = '<img src="' + e.target.result + '" style="max-height:52px;max-width:126px;object-fit:contain"/>';
+    const btn = document.getElementById('sig-remove-btn');
+    if (btn) btn.style.display = 'inline-flex';
+  };
+  reader.readAsDataURL(file);
+}
+
+async function removeSignature() {
+  SETTINGS.signatureDataUrl = '';
   await persistShopSettings();
   renderSettings();
   setTimeout(renderDepartmentsList, 10);
