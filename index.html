@@ -242,6 +242,7 @@ create table if not exists clients (id text primary key, shop_id text, name text
 create table if not exists invoices (id text primary key, shop_id text, type text default 'invoice', quotation_ref text, data jsonb, created_at timestamp default now());
 create table if not exists payments (id text primary key, shop_id text, invoice_id text, amount numeric, method text, note text, paid_at text);
 create table if not exists pos_shop_settings (shop_id text primary key, settings jsonb, updated_at timestamp);
+create table if not exists expenses (id text primary key, shop_id text, amount numeric, category text, payee text, method text, note text, date text, created_at timestamp default now());
 
 -- Migrate existing rows (run if upgrading)
 alter table invoices add column if not exists type text default 'invoice';
@@ -249,21 +250,25 @@ alter table invoices add column if not exists quotation_ref text;
 alter table invoices add column if not exists shop_id text;
 alter table clients add column if not exists shop_id text;
 alter table payments add column if not exists shop_id text;
+alter table expenses add column if not exists shop_id text;
 
 -- Enable RLS on all tables
 alter table clients enable row level security;
 alter table invoices enable row level security;
 alter table payments enable row level security;
 alter table pos_shop_settings enable row level security;
+alter table expenses enable row level security;
 
 -- Per-shop isolation policies (anon key; app passes shop_id in every query)
 drop policy if exists "allow all" on clients;
 drop policy if exists "allow all" on invoices;
 drop policy if exists "allow all" on payments;
+drop policy if exists "allow all" on expenses;
 create policy "shop_clients" on clients for all using (true) with check (true);
 create policy "shop_invoices" on invoices for all using (true) with check (true);
 create policy "shop_payments" on payments for all using (true) with check (true);
-create policy "shop_settings" on pos_shop_settings for all using (true) with check (true);</pre>
+create policy "shop_settings" on pos_shop_settings for all using (true) with check (true);
+create policy "shop_expenses" on expenses for all using (true) with check (true);</pre>
     </details>
     <div style="display:grid;gap:10px;margin-bottom:16px">
       <div><label>Supabase Project URL</label><input id="sb-url" placeholder="https://xxxxxxxxxxxx.supabase.co"/></div>
@@ -325,6 +330,7 @@ create policy "shop_settings" on pos_shop_settings for all using (true) with che
       <div class="page" id="page-invoices"></div>
       <div class="page" id="page-clients"></div>
       <div class="page" id="page-inventory"></div>
+      <div class="page" id="page-expenses"></div>
       <div class="page" id="page-analytics"></div>
       <div class="page" id="page-users"></div>
       <div class="page" id="page-settings"></div>
@@ -384,6 +390,17 @@ create policy "shop_settings" on pos_shop_settings for all using (true) with che
         <div><label>Notes</label><textarea id="cl-notes" rows="2" style="resize:none"></textarea></div>
         <button class="btn btn-red" onclick="saveClient()"><i class="ti ti-check"></i> Save Client</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Expense Modal -->
+  <div class="modal-bg" id="expense-modal">
+    <div class="modal" style="width:480px;max-width:95vw">
+      <div class="modal-hdr">
+        <span><i class="ti ti-cash-banknote-off" style="color:var(--red)"></i> <span id="expense-modal-title">Record Expense</span></span>
+        <button class="btn btn-outline btn-sm" onclick="closeModal('expense-modal')"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:18px" id="expense-modal-body"></div>
     </div>
   </div>
 
@@ -604,6 +621,30 @@ const now = () => new Date();
 const dateStr = d => (d || now()).toLocaleDateString('en-KE', {day:'2-digit', month:'short', year:'numeric'});
 const timeStr = d => (d || now()).toLocaleTimeString('en-KE', {hour:'2-digit', minute:'2-digit'});
 const uid = () => Math.random().toString(36).slice(2, 8).toUpperCase();
+
+// Generate the next sequential invoice/quotation number based on the highest
+// existing number — so deleted numbers are NEVER reused (prevents ID collisions
+// that cause delete-removes-old-invoice and "data carries over" bugs).
+function nextInvoiceNumber() {
+  let maxN = 300; // first invoice is MMP-301
+  invoices.forEach(i => {
+    if (i.type !== 'quotation' && typeof i.id === 'string') {
+      const m = i.id.match(/^MMP-(\d+)$/);
+      if (m) { const n = parseInt(m[1], 10); if (n > maxN) maxN = n; }
+    }
+  });
+  return 'MMP-' + String(maxN + 1).padStart(3, '0');
+}
+function nextQuotationNumber() {
+  let maxN = 100; // first quotation is QT-101
+  invoices.forEach(i => {
+    if (i.type === 'quotation' && typeof i.id === 'string') {
+      const m = i.id.match(/^QT-(\d+)$/);
+      if (m) { const n = parseInt(m[1], 10); if (n > maxN) maxN = n; }
+    }
+  });
+  return 'QT-' + String(maxN + 1).padStart(3, '0');
+}
 function genReferralCode(name) {
   const prefix = (name || 'CL').replace(/[^a-zA-Z]/g, '').slice(0, 2).toUpperCase().padEnd(2, 'X');
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -700,6 +741,14 @@ async function dbUpdateInvoice(inv) {
 async function dbInsertPayment(p) {
   if (!useSupabase) return;
   await sb.from('payments').upsert({ id: p.id, shop_id: currentShopId, invoice_id: p.invoiceId, amount: p.amount, method: p.method, note: p.note, paid_at: p.paidAt });
+}
+async function dbInsertExpense(e) {
+  if (!useSupabase) return;
+  await sb.from('expenses').upsert({ id: e.id, shop_id: currentShopId, amount: e.amount, category: e.category, payee: e.payee, method: e.method, note: e.note, date: e.date });
+}
+async function dbDeleteExpense(id) {
+  if (!useSupabase) return;
+  await sb.from('expenses').delete().eq('id', id).eq('shop_id', currentShopId);
 }
 
 async function deleteClient(id) {
@@ -988,14 +1037,16 @@ function updateStatusMessage(msg, text) {
 async function loadFromSupabase() {
   if (!useSupabase) return;
   try {
-    const [{ data: cls }, { data: invs }, { data: pays }] = await Promise.all([
+    const [{ data: cls }, { data: invs }, { data: pays }, expRes] = await Promise.all([
       sb.from('clients').select('*').eq('shop_id', currentShopId),
       sb.from('invoices').select('*').eq('shop_id', currentShopId).order('created_at', { ascending: false }),
       sb.from('payments').select('*').eq('shop_id', currentShopId),
+      sb.from('expenses').select('*').eq('shop_id', currentShopId).order('date', { ascending: false }).then(r => r, () => ({ data: null })),
     ]);
     if (cls) clients = cls.map(r => ({ id: r.id, name: r.name, phone: r.phone, email: r.email, event: r.event, birthday: r.birthday || null, notes: r.notes, referral_code: r.referral_code || null, referred_by: r.referred_by || null, createdAt: r.created_at }));
     if (invs) invoices = invs.map(r => r.data);
     if (pays) payments = pays.map(r => ({ id: r.id, invoiceId: r.invoice_id, amount: parseFloat(r.amount), method: r.method, note: r.note, paidAt: r.paid_at }));
+    if (expRes && expRes.data) expenses = expRes.data.map(r => ({ id: r.id, amount: parseFloat(r.amount) || 0, category: r.category || 'Miscellaneous', payee: r.payee || '', method: r.method || 'cash', note: r.note || '', date: r.date || '' }));
   } catch (e) { console.warn('Supabase load error', e); }
 }
 
@@ -1023,6 +1074,7 @@ const MODULE_PERM_MAP = {
   'mod-pos-users':     'users',
   'mod-pos-depts':     'pos',      // dept setup → also unlocks pos
   'mod-pos-settings':  'settings',
+  'mod-pos-expenses':  'expenses',
 };
 
 // Some modules unlock multiple pages
@@ -1057,6 +1109,7 @@ function resolveModulePages(mod) {
   if (/service|catalogue|catalog|department|dept|menu/.test(all)) pages.push('services');
   if (/user|access|staff|role|permiss|hr|employ/.test(all)) pages.push('users');
   if (/setting|config|setup|brand|mpesa|payment|sms|whatsapp|notification|cloud|offline|audit/.test(all)) pages.push('settings');
+  if (/expense|expenditur|cost|bill|payabl|opex/.test(all)) pages.push('expenses');
 
   return pages.length ? pages : [];
 }
@@ -1068,7 +1121,7 @@ function resolveModulePage(mod) {
 }
 
 // All possible POS perms
-const ALL_POS_PERMS = ['dashboard','pos','invoices','clients','inventory','analytics','users','services','settings','modules'];
+const ALL_POS_PERMS = ['dashboard','pos','invoices','clients','inventory','expenses','analytics','users','services','settings','modules'];
 
 // ── GRANULAR ACTION PERMISSIONS ───────────────────────────
 const ACTION_PERMS = [
@@ -1089,6 +1142,10 @@ const ACTION_PERMS = [
   { key:'inventory.delete',   label:'Delete Inventory Items',         group:'Inventory'  },
   { key:'analytics.view',     label:'View Analytics & Reports',       group:'Analytics'  },
   { key:'analytics.export',   label:'Export / Download Reports',      group:'Analytics'  },
+  { key:'exp.view',           label:'View Expenses',                  group:'Expenses'   },
+  { key:'exp.create',         label:'Record New Expenses',            group:'Expenses'   },
+  { key:'exp.edit',           label:'Edit Expense Entries',           group:'Expenses'   },
+  { key:'exp.delete',         label:'Delete Expense Entries',         group:'Expenses'   },
   { key:'settings.edit',      label:'Edit Business Settings',         group:'Settings'   },
   { key:'settings.logo',      label:'Upload / Change Business Logo',  group:'Settings'   },
   { key:'dept.manage',        label:'Manage Departments (Add/Edit/Delete)', group:'Settings' },
@@ -1099,7 +1156,7 @@ function defaultPermsForRole(role) {
   const all = Object.fromEntries(ACTION_PERMS.map(p => [p.key, true]));
   if (role === 'owner' || role === 'admin') return all;
   if (role === 'manager') {
-    return { ...all, 'settings.edit':false, 'settings.logo':false, 'dept.manage':false, 'staff.manage':false, 'inv.delete':false, 'clients.delete':false, 'inventory.delete':false };
+    return { ...all, 'settings.edit':false, 'settings.logo':false, 'dept.manage':false, 'staff.manage':false, 'inv.delete':false, 'clients.delete':false, 'inventory.delete':false, 'exp.delete':false };
   }
   // cashier
   return {
@@ -1109,6 +1166,7 @@ function defaultPermsForRole(role) {
     'clients.create':true, 'clients.edit':true, 'clients.delete':false,
     'inventory.add':false, 'inventory.edit':false, 'inventory.delete':false,
     'analytics.view':false, 'analytics.export':false,
+    'exp.view':false, 'exp.create':false, 'exp.edit':false, 'exp.delete':false,
     'settings.edit':false, 'settings.logo':false, 'dept.manage':false, 'staff.manage':false,
   };
 }
@@ -1279,6 +1337,7 @@ async function doLogin() { epLogin(); }
 
 function logout() {
   currentUser = null; cart = [];
+  invoices = []; clients = []; payments = []; expenses = [];
   currentShopId = ''; currentShopName = ''; assignedModules = [];
   if (useSupabase) sb = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
   document.getElementById('app').classList.remove('show');
@@ -1459,12 +1518,69 @@ async function persistShopSettings() {
 }
 
 // State
-let cart = [], payMethod = 'cash', invoices = [], clients = [], payments = [];
+let cart = [], payMethod = 'cash', invoices = [], clients = [], payments = [], expenses = [];
 let activeDept = 'all', invFilter = 'all', invTypeFilter = 'all', invSearch = '', clientSearch = '';
 let activePeriod = 'all', mpesaPhone = '';
 let periodFrom = '', periodTo = '';
 let svcSearch = '', svcDeptFilter = 'all';
 let analyticsChart = null;
+let expSearch = '', expCatFilter = 'all', expFromFilter = '', expToFilter = '';
+
+// Expense categories. "Cost of Goods Sold" is treated as a DIRECT cost
+// (subtracted from revenue to get Gross Profit). All others are operating
+// expenses (subtracted from Gross Profit to get Net Profit).
+const EXPENSE_CATEGORIES = [
+  'Cost of Goods Sold',
+  'Rent & Utilities',
+  'Salaries & Wages',
+  'Supplies & Materials',
+  'Marketing & Advertising',
+  'Transport & Fuel',
+  'Maintenance & Repairs',
+  'Insurance',
+  'Taxes & Licenses',
+  'Bank Charges',
+  'Subscriptions & Software',
+  'Professional Fees',
+  'Office Supplies',
+  'Travel',
+  'Miscellaneous',
+];
+const COGS_CATEGORY = 'Cost of Goods Sold';
+
+function expensesInRange(from, to) {
+  if (!from && !to) return expenses;
+  return expenses.filter(e => {
+    if (!e.date) return true;
+    if (from && e.date < from) return false;
+    if (to   && e.date > to)   return false;
+    return true;
+  });
+}
+
+// Helper: convert an invoice's "DD MMM YYYY" date to ISO "YYYY-MM-DD" so it
+// can be compared with the ISO-formatted expense dates and ISO date inputs.
+function invDateToISO(s) {
+  const d = parseInvDate(s);
+  if (!d) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// Period summary for current global periodFrom/periodTo (used by dashboard +
+// analytics). Returns revenue, expense breakdown, gross/net profit.
+function computeFinancials(periodInvList) {
+  const revenue = periodInvList.reduce((s, i) => s + (i.total || 0), 0);
+  const expList = expensesInRange(periodFrom, periodTo);
+  const cogs = expList.filter(e => e.category === COGS_CATEGORY).reduce((s, e) => s + (e.amount || 0), 0);
+  const opex = expList.filter(e => e.category !== COGS_CATEGORY).reduce((s, e) => s + (e.amount || 0), 0);
+  const totalExpenses = cogs + opex;
+  const grossProfit = revenue - cogs;
+  const netProfit   = grossProfit - opex;
+  return { revenue, cogs, opex, totalExpenses, grossProfit, netProfit, expCount: expList.length };
+}
 
 // ── Computed helpers ─────────────────────────────────────
 function invPayments(invId) { return payments.filter(p => p.invoiceId === invId); }
@@ -1487,6 +1603,7 @@ function buildSidebar() {
     { key:'invoices',  icon:'ti-file-invoice',      label:'Invoices',      section:'Records' },
     { key:'clients',   icon:'ti-users',             label:'Clients',       section:null      },
     { key:'inventory', icon:'ti-package',           label:'Inventory',     section:null      },
+    { key:'expenses',  icon:'ti-cash-banknote-off', label:'Expenses',      section:null      },
     { key:'analytics', icon:'ti-chart-bar',         label:'Analytics',     section:'Reports' },
     { key:'users',     icon:'ti-shield-lock',       label:'Users & Access',section:'Admin'   },
     { key:'modules',   icon:'ti-puzzle',            label:'My Modules',    section:null      },
@@ -1522,7 +1639,7 @@ function nav(page, scroll) {
   if (el) el.classList.add('active');
   const titles = {
     dashboard:'Dashboard', pos:'New Sale', invoices:'Invoices', clients:'Clients',
-    inventory:'Inventory', analytics:'Analytics & Reports', users:'Users & Access',
+    inventory:'Inventory', expenses:'Expenses', analytics:'Analytics & Reports', users:'Users & Access',
     services:'Service Management', settings:'Settings', modules:'My Modules'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
@@ -1531,6 +1648,7 @@ function nav(page, scroll) {
   if (page === 'invoices')   renderInvoices();
   if (page === 'clients')    renderClients();
   if (page === 'inventory')  renderInventory();
+  if (page === 'expenses')   renderExpenses();
   if (page === 'analytics')  renderAnalytics();
   if (page === 'users')      renderUsers();
   if (page === 'settings')   { renderSettings(); setTimeout(renderDepartmentsList, 10); }
@@ -1605,6 +1723,15 @@ function renderDashboard() {
   }));
   const qtPending   = qtOnly.filter(i => i.status === 'Pending');
   const qtPendingVal = qtPending.reduce((a, i) => a + i.total, 0);
+
+  // ── Profit & expense summary (uses analytics period filter if set) ──
+  const periodInv = filterByPeriod(invOnly);
+  const fin = computeFinancials(periodInv);
+  const isPeriod = !!(periodFrom || periodTo);
+  const periodLabel = isPeriod ? `${periodFrom || 'start'} → ${periodTo || 'now'}` : 'All-time';
+  const grossMargin = fin.revenue ? Math.round(fin.grossProfit / fin.revenue * 100) : 0;
+  const netMargin   = fin.revenue ? Math.round(fin.netProfit   / fin.revenue * 100) : 0;
+
   document.getElementById('page-dashboard').innerHTML = `
     <div class="stats-grid">
       <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Total Billed</div><div class="stat-value">${fmt(total)}</div><div class="stat-sub">${invOnly.length} invoices</div></div>
@@ -1613,6 +1740,21 @@ function renderDashboard() {
       <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Outstanding</div><div class="stat-value">${fmt(unpaid)}</div><div class="stat-sub">No payment yet</div></div>
       <div class="stat-card" style="border-top-color:var(--blue)"><div class="stat-label">Today's Sales</div><div class="stat-value">${fmt(todayRev)}</div><div class="stat-sub">${todayInvs.length} txns</div></div>
       <div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">Pending Quotations</div><div class="stat-value">${fmt(qtPendingVal)}</div><div class="stat-sub">${qtPending.length} open · ${qtOnly.length} total</div></div>
+    </div>
+
+    <!-- Profitability strip -->
+    <div class="card" style="margin-top:14px;margin-bottom:14px;padding:14px 16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div class="card-title" style="margin:0"><i class="ti ti-trending-up" style="color:var(--green)"></i> Profitability <span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:6px">${periodLabel}</span></div>
+        ${hasPerm('exp.view') ? `<button class="btn btn-sm btn-outline" onclick="nav('expenses',1)" title="Open expenses"><i class="ti ti-cash-banknote-off"></i> Manage Expenses</button>` : ''}
+      </div>
+      <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
+        <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Revenue</div><div class="stat-value">${fmt(fin.revenue)}</div><div class="stat-sub">${periodInv.length} invoice${periodInv.length === 1 ? '' : 's'}</div></div>
+        <div class="stat-card" style="border-top-color:#f59e0b"><div class="stat-label">Cost of Goods</div><div class="stat-value">${fmt(fin.cogs)}</div><div class="stat-sub">Direct costs</div></div>
+        <div class="stat-card" style="border-top-color:#0ea5e9"><div class="stat-label">Gross Profit</div><div class="stat-value" style="color:${fin.grossProfit >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.grossProfit)}</div><div class="stat-sub">${grossMargin}% margin</div></div>
+        <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Operating Expenses</div><div class="stat-value">${fmt(fin.opex)}</div><div class="stat-sub">${fin.expCount} expense${fin.expCount === 1 ? '' : 's'}</div></div>
+        <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Net Profit</div><div class="stat-value" style="color:${fin.netProfit >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.netProfit)}</div><div class="stat-sub">${netMargin}% margin</div></div>
+      </div>
     </div>
     <div class="two-col" style="margin-bottom:14px">
       <div class="card">
@@ -1666,7 +1808,22 @@ function visibleDepts() {
   return DEPTS;
 }
 
+function startNewSale() {
+  if (cart.length && !confirm('Clear the current cart and start a fresh sale? Any unsaved items will be discarded.')) return;
+  cart = [];
+  payMethod = 'cash';
+  mpesaPhone = '';
+  if (typeof window !== 'undefined') window._pendingInv = null;
+  renderPOS();
+  if (typeof nav === 'function') nav('pos', 0);
+}
+
 function renderPOS() {
+  // Reset transient sale state so the previous sale's selections can't leak
+  // into a brand-new sale (payment method, m-pesa phone, pending m-pesa invoice).
+  payMethod = 'cash';
+  mpesaPhone = '';
+  if (typeof window !== 'undefined') window._pendingInv = null;
   const vd = visibleDepts();
   // If cashier is restricted to one dept, auto-select it and skip "All" tab
   const isRestricted = currentUser?.role === 'cashier' && currentUser?.allowedDepts;
@@ -1690,7 +1847,11 @@ function renderPOS() {
         <div class="svc-list"><div class="svc-grid" id="svc-grid">${buildSvcGrid(activeDept, '')}</div></div>
       </div>
       <div class="cart-panel">
-        <div class="cart-hdr"><span><i class="ti ti-shopping-cart" style="color:var(--red)"></i> Cart</span><span style="color:var(--muted)" id="cart-count-lbl">0 items</span></div>
+        <div class="cart-hdr" style="display:flex;align-items:center;gap:8px">
+          <span style="flex:1"><i class="ti ti-shopping-cart" style="color:var(--red)"></i> Cart</span>
+          <span style="color:var(--muted)" id="cart-count-lbl">0 items</span>
+          <button class="btn btn-outline btn-sm" onclick="startNewSale()" title="Clear cart and start a fresh sale" style="padding:3px 8px;font-size:11px"><i class="ti ti-refresh"></i> New Sale</button>
+        </div>
         <div class="cart-info">
           <div><label>Client</label><select id="cart-client" onchange="onClientSelect(this.value)">${clientOpts}</select></div>
           <div class="cart-row-info">
@@ -1930,9 +2091,8 @@ async function checkout() {
   const amountPaid = (cartPaidAmt > 0 && cartPaidAmt < total) ? cartPaidAmt : total;
   const isPartial = amountPaid < total;
 
-  const invCount = invoices.filter(i => i.type !== 'quotation').length;
   const inv = {
-    id: 'MMP-' + String(invCount + 301).padStart(3, '0'),
+    id: nextInvoiceNumber(),
     type: 'invoice',
     clientName, clientPhone, clientEmail: clientEmail || '',
     clientWhatsApp: clientWA || '', clientId: clientSel || null,
@@ -2071,9 +2231,8 @@ async function checkoutAsQuotation() {
   const clientEmail = document.getElementById('cart-cemail')?.value.trim();
   const eventDate   = document.getElementById('cart-date')?.value;
   if (!clientName) clientName = 'Walk-in #' + uid();
-  const qtCount = invoices.filter(i => i.type === 'quotation').length;
   const qt = {
-    id: 'QT-' + String(qtCount + 101).padStart(3, '0'),
+    id: nextQuotationNumber(),
     type: 'quotation',
     clientName, clientPhone, clientEmail: clientEmail || '',
     clientId: clientSel || null,
@@ -2503,10 +2662,9 @@ async function convertQuotationToInvoice(qtId) {
   if (qt.status === 'converted') { alert('This quotation has already been converted to an invoice.'); return; }
   if (!confirm(`Generate invoice from quotation ${qtId} for ${qt.clientName}?`)) return;
 
-  const invCount = invoices.filter(i => i.type !== 'quotation').length;
   const newInv = {
     ...qt,
-    id: 'MMP-' + String(invCount + 301).padStart(3, '0'),
+    id: nextInvoiceNumber(),
     type: 'invoice',
     payMethod: 'credit',
     status: 'Unpaid',
@@ -2661,6 +2819,9 @@ async function saveEditedInvoice() {
 function openPaymentModal(invId) {
   const inv = invoices.find(i => i.id === invId); if (!inv) return;
   const balance = invBalance(inv);
+  const _n = new Date();
+  const _today = `${_n.getFullYear()}-${String(_n.getMonth()+1).padStart(2,'0')}-${String(_n.getDate()).padStart(2,'0')}`;
+  const _nowTime = `${String(_n.getHours()).padStart(2,'0')}:${String(_n.getMinutes()).padStart(2,'0')}`;
   document.getElementById('payment-modal-body').innerHTML = `
     <div style="background:#f8f8f6;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:14px;font-size:12px">
       <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--muted)">Invoice</span><span style="font-weight:600">${inv.id} — ${inv.clientName}</span></div>
@@ -2671,6 +2832,10 @@ function openPaymentModal(invId) {
       <div><label>Payment Amount (KSh) *</label><input type="number" id="pay-amount" placeholder="0" max="${balance}" value="${balance}" min="1"/></div>
       <div><label>Payment Method</label>
         <select id="pay-method" onchange="updatePaymentDetails()"><option value="cash">Cash</option><option value="mpesa">M-Pesa</option><option value="bank">Bank Transfer</option></select>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div><label>Payment Date *</label><input type="date" id="pay-date" value="${_today}"/></div>
+        <div><label>Payment Time</label><input type="time" id="pay-time" value="${_nowTime}"/></div>
       </div>
       <div id="payment-details-box"></div>
       <div><label>Note / Reference</label><input id="pay-note" placeholder="e.g. Balance, M-Pesa ref NKW1234…"/></div>
@@ -2719,7 +2884,12 @@ async function recordPayment(invId) {
   const inv = invoices.find(i => i.id === invId); if (!inv) return;
   const bal = invBalance(inv);
   if (amount > bal + 0.01) { alert(`Amount exceeds balance of ${fmt(bal)}`); return; }
-  const p = { id: uid(), invoiceId: invId, amount, method, note, paidAt: dateStr() + ' ' + timeStr() };
+  const payDateVal = document.getElementById('pay-date')?.value;
+  const payTimeVal = document.getElementById('pay-time')?.value;
+  if (!payDateVal) { alert('Please pick a payment date.'); return; }
+  const payDt = new Date(payDateVal + 'T' + (payTimeVal || '12:00'));
+  if (isNaN(payDt)) { alert('Invalid payment date/time.'); return; }
+  const p = { id: uid(), invoiceId: invId, amount, method, note, paidAt: dateStr(payDt) + ' ' + timeStr(payDt) };
   payments.push(p);
   await dbInsertPayment(p);
   if (invBalance(inv) <= 0) { inv.status = 'Paid'; await dbUpdateInvoice(inv); }
@@ -3044,6 +3214,197 @@ function deleteInventoryItem(id) {
   renderInventory();
 }
 
+// ── EXPENSES ─────────────────────────────────────────────
+function renderExpenses() {
+  const el = document.getElementById('page-expenses');
+  if (!el) return;
+  if (!hasPerm('exp.view')) {
+    el.innerHTML = `<div class="card" style="text-align:center;padding:30px;color:var(--muted)"><i class="ti ti-lock" style="font-size:28px;display:block;margin-bottom:8px"></i>You don't have permission to view expenses.</div>`;
+    return;
+  }
+
+  // Apply filters
+  let list = [...expenses];
+  if (expCatFilter !== 'all') list = list.filter(x => x.category === expCatFilter);
+  if (expFromFilter) list = list.filter(x => !x.date || x.date >= expFromFilter);
+  if (expToFilter)   list = list.filter(x => !x.date || x.date <= expToFilter);
+  if (expSearch) {
+    const q = expSearch.toLowerCase();
+    list = list.filter(x =>
+      (x.payee || '').toLowerCase().includes(q) ||
+      (x.note  || '').toLowerCase().includes(q) ||
+      (x.category || '').toLowerCase().includes(q)
+    );
+  }
+  list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+  const total = list.reduce((s, e) => s + (e.amount || 0), 0);
+  const catTotals = {};
+  list.forEach(e => { catTotals[e.category] = (catTotals[e.category] || 0) + (e.amount || 0); });
+  const topCats = Object.entries(catTotals).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  const catOptions = ['<option value="all">All Categories</option>']
+    .concat(EXPENSE_CATEGORIES.map(c => `<option value="${c}" ${expCatFilter === c ? 'selected' : ''}>${c}</option>`)).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <span style="color:var(--muted);font-size:12px">Operating costs &amp; cost-of-goods tracking — ${expenses.length} entries total</span>
+      ${hasPerm('exp.create') ? `<button class="btn btn-red btn-sm" onclick="openExpenseModal()"><i class="ti ti-plus"></i> Record Expense</button>` : ''}
+    </div>
+
+    <!-- Filter bar -->
+    <div class="card" style="padding:12px 14px;margin-bottom:12px">
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
+        <div style="flex:1;min-width:160px">
+          <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px">Search</label>
+          <div class="search-bar" style="margin:0"><i class="ti ti-search"></i><input placeholder="Payee, note, category…" value="${expSearch}" oninput="expSearch=this.value;renderExpenses()"/></div>
+        </div>
+        <div>
+          <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px">Category</label>
+          <select onchange="expCatFilter=this.value;renderExpenses()" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);font-size:12px;min-width:170px">${catOptions}</select>
+        </div>
+        <div>
+          <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px">From</label>
+          <input type="date" value="${expFromFilter}" onchange="expFromFilter=this.value;renderExpenses()" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);font-size:12px"/>
+        </div>
+        <div>
+          <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px">To</label>
+          <input type="date" value="${expToFilter}" onchange="expToFilter=this.value;renderExpenses()" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);font-size:12px"/>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="expSearch='';expCatFilter='all';expFromFilter='';expToFilter='';renderExpenses()" title="Clear all filters"><i class="ti ti-x"></i> Clear</button>
+      </div>
+    </div>
+
+    <!-- KPI strip -->
+    <div class="stats-grid" style="margin-bottom:14px">
+      <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Total (Filtered)</div><div class="stat-value">${fmt(total)}</div><div class="stat-sub">${list.length} entr${list.length === 1 ? 'y' : 'ies'}</div></div>
+      <div class="stat-card" style="border-top-color:var(--amber)"><div class="stat-label">Top Category</div><div class="stat-value" style="font-size:14px;line-height:1.3">${topCats[0] ? topCats[0][0] : '—'}</div><div class="stat-sub">${topCats[0] ? fmt(topCats[0][1]) : 'No entries'}</div></div>
+      <div class="stat-card" style="border-top-color:var(--blue)"><div class="stat-label">Categories Used</div><div class="stat-value">${Object.keys(catTotals).length}</div><div class="stat-sub">of ${EXPENSE_CATEGORIES.length} total</div></div>
+      <div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">All-Time Total</div><div class="stat-value">${fmt(expenses.reduce((s, e) => s + (e.amount || 0), 0))}</div><div class="stat-sub">All entries</div></div>
+    </div>
+
+    <!-- Top categories -->
+    ${topCats.length ? `<div class="card" style="margin-bottom:14px">
+      <div class="card-title"><i class="ti ti-chart-pie" style="color:var(--red)"></i> Top Categories (Filtered)</div>
+      ${topCats.map(([cat, val]) => {
+        const pct = total ? Math.round(val / total * 100) : 0;
+        return `<div style="padding:5px 0;border-bottom:1px solid #f5f5f3">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+            <span>${cat}</span>
+            <span><span style="color:var(--muted);font-size:10px;margin-right:6px">${pct}%</span><strong>${fmt(val)}</strong></span>
+          </div>
+          <div style="height:4px;background:#f0f0ee;border-radius:2px"><div style="height:4px;width:${pct}%;background:${cat === COGS_CATEGORY ? '#dc2626' : '#f59e0b'};border-radius:2px"></div></div>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
+
+    <!-- Expense table -->
+    <div class="card">
+      <div style="overflow-x:auto">
+        <table class="table" style="width:100%;min-width:760px">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Category</th>
+              <th>Payee</th>
+              <th>Method</th>
+              <th>Note</th>
+              <th style="text-align:right">Amount</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${!list.length
+              ? `<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:22px">No expenses match the current filters.</td></tr>`
+              : list.map(e => `<tr>
+                  <td style="color:var(--muted);font-size:11px">${e.date || '—'}</td>
+                  <td><span class="badge ${e.category === COGS_CATEGORY ? 'badge-red' : 'badge-amber'}">${e.category}</span></td>
+                  <td style="font-weight:500">${e.payee || '—'}</td>
+                  <td style="text-transform:capitalize;color:var(--muted);font-size:11px">${e.method || '—'}</td>
+                  <td style="color:var(--muted);font-size:11px;max-width:280px;overflow:hidden;text-overflow:ellipsis">${e.note || ''}</td>
+                  <td style="text-align:right;font-weight:600;color:#dc2626">${fmt(e.amount)}</td>
+                  <td style="white-space:nowrap;text-align:right">
+                    ${hasPerm('exp.edit')   ? `<button class="btn btn-sm btn-outline" onclick="openExpenseModal('${e.id}')" title="Edit"><i class="ti ti-pencil"></i></button>` : ''}
+                    ${hasPerm('exp.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;margin-left:4px" onclick="deleteExpense('${e.id}')" title="Delete"><i class="ti ti-trash"></i></button>` : ''}
+                  </td>
+                </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function openExpenseModal(editId) {
+  if (editId && !hasPerm('exp.edit'))   { alert('You do not have permission to edit expenses.'); return; }
+  if (!editId && !hasPerm('exp.create')) { alert('You do not have permission to add expenses.'); return; }
+  const existing = editId ? expenses.find(e => e.id === editId) : null;
+  const today = new Date().toISOString().slice(0, 10);
+  const catOpts = EXPENSE_CATEGORIES.map(c => `<option value="${c}" ${existing && existing.category === c ? 'selected' : ''}>${c}</option>`).join('');
+  document.getElementById('expense-modal-title').textContent = existing ? 'Edit Expense' : 'Record Expense';
+  document.getElementById('expense-modal-body').innerHTML = `
+    <div style="display:grid;gap:10px">
+      <input type="hidden" id="exp-id" value="${existing ? existing.id : ''}"/>
+      <div class="two-col">
+        <div><label>Amount (KSh) *</label><input type="number" id="exp-amount" min="0" step="0.01" value="${existing ? existing.amount : ''}" placeholder="0.00"/></div>
+        <div><label>Date *</label><input type="date" id="exp-date" value="${existing ? existing.date : today}"/></div>
+      </div>
+      <div><label>Category *</label><select id="exp-category">${catOpts}</select></div>
+      <div class="two-col">
+        <div><label>Payee / Vendor</label><input id="exp-payee" value="${existing ? (existing.payee || '') : ''}" placeholder="e.g. Kenya Power"/></div>
+        <div><label>Paid Via</label>
+          <select id="exp-method">
+            ${['cash','mpesa','bank','card','other'].map(m => `<option value="${m}" ${existing && existing.method === m ? 'selected' : ''}>${m.charAt(0).toUpperCase() + m.slice(1)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div><label>Note / Reference</label><textarea id="exp-note" placeholder="Invoice ref, description, etc." style="min-height:60px;resize:vertical;padding:8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:12px;width:100%">${existing ? (existing.note || '') : ''}</textarea></div>
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 10px;font-size:11px;color:#92400e">
+        <i class="ti ti-info-circle"></i> Tip: tag direct costs (raw materials, stock purchased for resale, etc.) as <strong>Cost of Goods Sold</strong> — these reduce <strong>Gross Profit</strong>. All other categories reduce <strong>Net Profit</strong>.
+      </div>
+      <button class="btn btn-red" style="width:100%;justify-content:center" onclick="saveExpense()"><i class="ti ti-check"></i> ${existing ? 'Update' : 'Save'} Expense</button>
+    </div>`;
+  openModal('expense-modal');
+}
+
+async function saveExpense() {
+  const id     = document.getElementById('exp-id').value;
+  const amount = parseFloat(document.getElementById('exp-amount').value) || 0;
+  const date   = document.getElementById('exp-date').value;
+  const category = document.getElementById('exp-category').value;
+  const payee  = document.getElementById('exp-payee').value.trim();
+  const method = document.getElementById('exp-method').value;
+  const note   = document.getElementById('exp-note').value.trim();
+
+  if (amount <= 0) { alert('Enter a valid amount.'); return; }
+  if (!date)       { alert('Pick a date.'); return; }
+  if (!category)   { alert('Pick a category.'); return; }
+
+  if (id) {
+    const existing = expenses.find(e => e.id === id);
+    if (!existing) { alert('Expense not found.'); return; }
+    existing.amount = amount; existing.date = date; existing.category = category;
+    existing.payee = payee; existing.method = method; existing.note = note;
+    await dbInsertExpense(existing);
+  } else {
+    const e = { id: uid(), amount, date, category, payee, method, note };
+    expenses.push(e);
+    await dbInsertExpense(e);
+  }
+  closeModal('expense-modal');
+  renderExpenses();
+  if (document.getElementById('page-dashboard')?.classList.contains('active')) renderDashboard();
+}
+
+async function deleteExpense(id) {
+  if (!hasPerm('exp.delete')) { alert('You do not have permission to delete expenses.'); return; }
+  const e = expenses.find(x => x.id === id);
+  if (!e) return;
+  if (!confirm(`Delete expense of ${fmt(e.amount)} (${e.category})? This cannot be undone.`)) return;
+  expenses = expenses.filter(x => x.id !== id);
+  await dbDeleteExpense(id);
+  renderExpenses();
+}
+
 // ── ANALYTICS ────────────────────────────────────────────
 let activeTopClientDept = 'all';
 // Birthday filter: mode = 'today' | 'window' | 'custom'
@@ -3110,6 +3471,17 @@ function renderAnalytics() {
     ? `${periodFrom || 'start'} to ${periodTo || 'now'}`
     : 'All Time';
 
+  // Profitability — uses same period filter
+  const fin = computeFinancials(filtered);
+  const grossMargin = fin.revenue ? Math.round(fin.grossProfit / fin.revenue * 100) : 0;
+  const netMargin   = fin.revenue ? Math.round(fin.netProfit   / fin.revenue * 100) : 0;
+
+  // Expense breakdown by category (in current period)
+  const expList = expensesInRange(periodFrom, periodTo);
+  const expByCat = {};
+  expList.forEach(e => { expByCat[e.category] = (expByCat[e.category] || 0) + (e.amount || 0); });
+  const expCatSorted = Object.entries(expByCat).sort((a, b) => b[1] - a[1]);
+
   document.getElementById('page-analytics').innerHTML = `
     <!-- Custom period filter + export buttons -->
     <div class="card" style="margin-bottom:14px;padding:12px 16px">
@@ -3130,17 +3502,56 @@ function renderAnalytics() {
           <button class="btn btn-sm" style="background:#C8252A;color:#fff" onclick="exportReportPDF()" title="Export PDF"><i class="ti ti-file-type-pdf"></i> PDF</button>
         </div>
       </div>
-      <div style="font-size:10px;color:var(--muted);margin-top:6px"><i class="ti ti-calendar" style="font-size:11px"></i> Showing: <strong>${pRangeLabel}</strong> · ${filtered.length} invoices</div>
+      <!-- Quick period presets -->
+      <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:10px;align-items:center">
+        <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-right:2px">Quick:</span>
+        ${[
+          ['today','Today'],['yesterday','Yesterday'],['week','This Week'],['last7','Last 7 Days'],
+          ['month','This Month'],['lastmonth','Last Month'],['quarter','This Quarter'],
+          ['year','This Year'],['lastyear','Last Year'],['all','All Time'],
+        ].map(([k, label]) => `<button class="btn btn-sm btn-outline" style="font-size:10px;padding:3px 9px" onclick="setAnalyticsPeriod('${k}')">${label}</button>`).join('')}
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-top:8px"><i class="ti ti-calendar" style="font-size:11px"></i> Showing: <strong>${pRangeLabel}</strong> · ${filtered.length} invoices · ${expList.length} expense${expList.length === 1 ? '' : 's'}</div>
     </div>
 
     <!-- KPI cards -->
-    <div id="rpt-kpi-strip" class="stats-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:14px">
+    <div id="rpt-kpi-strip" class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:14px">
       <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Total Billed</div><div class="stat-value">${fmt(total)}</div><div class="stat-sub">${filtered.length} invoices</div></div>
       <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Collected</div><div class="stat-value">${fmt(collected)}</div><div class="stat-sub">${total ? Math.round(collected/total*100) : 0}% of billed</div></div>
       <div class="stat-card" style="border-top-color:var(--amber)"><div class="stat-label">Partial Balance</div><div class="stat-value">${fmt(partial)}</div></div>
       <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Unpaid</div><div class="stat-value">${fmt(unpaid)}</div></div>
       <div class="stat-card" style="border-top-color:var(--blue)"><div class="stat-label">Avg Invoice</div><div class="stat-value">${fmt(avgInv)}</div></div>
     </div>
+
+    <!-- Profitability cards -->
+    <div class="card" style="margin-bottom:14px;padding:14px 16px">
+      <div class="card-title" style="margin-bottom:10px"><i class="ti ti-trending-up" style="color:var(--green)"></i> Profitability</div>
+      <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
+        <div class="stat-card" style="border-top-color:#f59e0b"><div class="stat-label">Cost of Goods</div><div class="stat-value">${fmt(fin.cogs)}</div><div class="stat-sub">Direct costs</div></div>
+        <div class="stat-card" style="border-top-color:#0ea5e9"><div class="stat-label">Gross Profit</div><div class="stat-value" style="color:${fin.grossProfit >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.grossProfit)}</div><div class="stat-sub">${grossMargin}% margin</div></div>
+        <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Operating Expenses</div><div class="stat-value">${fmt(fin.opex)}</div><div class="stat-sub">${fin.expCount - (expByCat[COGS_CATEGORY] ? expList.filter(e => e.category === COGS_CATEGORY).length : 0)} entries</div></div>
+        <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Net Profit</div><div class="stat-value" style="color:${fin.netProfit >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.netProfit)}</div><div class="stat-sub">${netMargin}% margin</div></div>
+        <div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">Total Expenses</div><div class="stat-value">${fmt(fin.totalExpenses)}</div><div class="stat-sub">${fin.expCount} entries</div></div>
+      </div>
+    </div>
+
+    ${expCatSorted.length ? `<div class="card" style="margin-bottom:14px">
+      <div class="card-title"><i class="ti ti-receipt-tax" style="color:var(--amber)"></i> Expense Breakdown by Category</div>
+      ${(() => {
+        const maxVal = Math.max(...expCatSorted.map(e => e[1]), 1);
+        return expCatSorted.map(([cat, val]) => {
+          const pct = Math.round(val / maxVal * 100);
+          const tot = fin.totalExpenses ? Math.round(val / fin.totalExpenses * 100) : 0;
+          return `<div style="padding:6px 0;border-bottom:1px solid #f5f5f3">
+            <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+              <span><span class="badge ${cat === COGS_CATEGORY ? 'badge-red' : 'badge-amber'}" style="margin-right:6px">${cat === COGS_CATEGORY ? 'COGS' : 'OpEx'}</span>${cat}</span>
+              <span><span style="color:var(--muted);font-size:10px;margin-right:8px">${tot}%</span><strong>${fmt(val)}</strong></span>
+            </div>
+            <div style="height:4px;background:#f0f0ee;border-radius:2px"><div style="height:4px;width:${pct}%;background:${cat === COGS_CATEGORY ? '#dc2626' : '#f59e0b'};border-radius:2px"></div></div>
+          </div>`;
+        }).join('');
+      })()}
+    </div>` : ''}
 
     <!-- Revenue chart -->
     <div id="rpt-timeline" class="card" style="margin-bottom:14px">
@@ -3343,6 +3754,48 @@ function renderAnalytics() {
 
 function setTopClientDept(d) { activeTopClientDept = d; renderAnalytics(); }
 
+// Set the global analytics period to a named preset (today / this week / month / etc.)
+function setAnalyticsPeriod(preset) {
+  const iso = d => d.toISOString().slice(0, 10);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  let from = '', to = '';
+  if (preset === 'today') {
+    from = to = iso(today);
+  } else if (preset === 'yesterday') {
+    const y = new Date(today); y.setDate(y.getDate() - 1);
+    from = to = iso(y);
+  } else if (preset === 'week') {
+    // Week starts Monday
+    const day = (today.getDay() + 6) % 7; // 0 = Mon
+    const start = new Date(today); start.setDate(today.getDate() - day);
+    from = iso(start); to = iso(today);
+  } else if (preset === 'last7') {
+    const start = new Date(today); start.setDate(today.getDate() - 6);
+    from = iso(start); to = iso(today);
+  } else if (preset === 'month') {
+    from = iso(new Date(today.getFullYear(), today.getMonth(), 1));
+    to   = iso(today);
+  } else if (preset === 'lastmonth') {
+    const start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const end   = new Date(today.getFullYear(), today.getMonth(), 0);
+    from = iso(start); to = iso(end);
+  } else if (preset === 'quarter') {
+    const q = Math.floor(today.getMonth() / 3);
+    from = iso(new Date(today.getFullYear(), q * 3, 1));
+    to   = iso(today);
+  } else if (preset === 'year') {
+    from = iso(new Date(today.getFullYear(), 0, 1));
+    to   = iso(today);
+  } else if (preset === 'lastyear') {
+    from = iso(new Date(today.getFullYear() - 1, 0, 1));
+    to   = iso(new Date(today.getFullYear() - 1, 11, 31));
+  } else { // 'all' or unknown
+    from = ''; to = '';
+  }
+  periodFrom = from; periodTo = to;
+  renderAnalytics();
+}
+
 // Returns clients with upcoming birthdays filtered by current bdayFilterMode
 function getFilteredBirthdays() {
   const today = new Date(); today.setHours(0,0,0,0);
@@ -3377,6 +3830,22 @@ function exportReportCSV() {
     const items = inv.items.map(i => i.name).join('; ');
     rows.push([inv.id, inv.date, inv.clientName||'', inv.clientPhone||'', depts, items, inv.total, invPaid(inv), invBalance(inv), invStatus(inv), inv.payMethod]);
   });
+  // Append expenses block + profitability summary
+  const expList = expensesInRange(periodFrom, periodTo);
+  const fin     = computeFinancials(filtered);
+  rows.push([]);
+  rows.push(['EXPENSES']);
+  rows.push(['Expense ID','Date','Category','Payee','Method','Note','Amount (KSh)']);
+  expList.forEach(e => rows.push([e.id, e.date, e.category, e.payee||'', e.method||'', e.note||'', e.amount]));
+  rows.push([]);
+  rows.push(['PROFITABILITY SUMMARY']);
+  rows.push(['Metric','Amount (KSh)']);
+  rows.push(['Revenue', fin.revenue]);
+  rows.push(['Cost of Goods Sold', fin.cogs]);
+  rows.push(['Gross Profit', fin.grossProfit]);
+  rows.push(['Operating Expenses', fin.opex]);
+  rows.push(['Total Expenses', fin.totalExpenses]);
+  rows.push(['Net Profit', fin.netProfit]);
   const csv = rows.map(r => r.map(v => `"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob(['﻿'+csv], { type:'text/csv;charset=utf-8' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `edospoa-report-${periodFrom||'all'}.csv`; a.click();
@@ -3423,6 +3892,31 @@ function exportReportXLSX() {
   }));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(topData), 'Top Clients');
 
+  // Sheet 4 — Expenses
+  const expList = expensesInRange(periodFrom, periodTo);
+  const expData = expList.map(e => ({
+    'Expense ID': e.id,
+    'Date': e.date,
+    'Category': e.category,
+    'Payee': e.payee || '',
+    'Method': e.method || '',
+    'Note': e.note || '',
+    'Amount (KSh)': e.amount,
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(expData), 'Expenses');
+
+  // Sheet 5 — Profitability
+  const fin = computeFinancials(filtered);
+  const profData = [
+    { Metric: 'Revenue',             'Amount (KSh)': fin.revenue       },
+    { Metric: 'Cost of Goods Sold',  'Amount (KSh)': fin.cogs          },
+    { Metric: 'Gross Profit',        'Amount (KSh)': fin.grossProfit   },
+    { Metric: 'Operating Expenses',  'Amount (KSh)': fin.opex          },
+    { Metric: 'Total Expenses',      'Amount (KSh)': fin.totalExpenses },
+    { Metric: 'Net Profit',          'Amount (KSh)': fin.netProfit     },
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(profData), 'Profitability');
+
   XLSX.writeFile(wb, `edospoa-report-${periodFrom||'all'}.xlsx`);
 }
 
@@ -3442,6 +3936,13 @@ function exportReportPDF() {
   const clientRevObj={};
   filtered.forEach(inv=>{ clientRevObj[inv.clientName]=(clientRevObj[inv.clientName]||0)+inv.total; });
   const top10 = Object.entries(clientRevObj).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
+  // Profit & expense data
+  const fin    = computeFinancials(filtered);
+  const expList = expensesInRange(periodFrom, periodTo);
+  const expByCat = {};
+  expList.forEach(e => { expByCat[e.category] = (expByCat[e.category] || 0) + (e.amount || 0); });
+  const expCatRows = Object.entries(expByCat).sort((a,b)=>b[1]-a[1]);
 
   const html = `
     <div style="font-family:Arial,sans-serif;padding:24px;max-width:750px;margin:0 auto;font-size:12px">
@@ -3473,6 +3974,24 @@ function exportReportPDF() {
           ${top10.map(([name,val],i)=>`<tr><td style="padding:6px 8px;border:1px solid #eee;text-align:center;font-weight:700">${i+1}</td><td style="padding:6px 8px;border:1px solid #eee">${name}</td><td style="padding:6px 8px;border:1px solid #eee;text-align:center">${filtered.filter(inv=>inv.clientName===name).length}</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:600;color:#C8252A">${fmt(val)}</td></tr>`).join('')}
         </table>
       </div>
+      <div style="margin-top:18px">
+        <div style="font-weight:700;margin-bottom:8px;color:#C8252A">Profitability Summary</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+          <tr style="background:#f9f9f9"><th style="padding:6px 8px;border:1px solid #eee;text-align:left">Metric</th><th style="padding:6px 8px;border:1px solid #eee;text-align:right">Amount (KSh)</th></tr>
+          <tr><td style="padding:6px 8px;border:1px solid #eee">Revenue</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:600">${fmt(fin.revenue)}</td></tr>
+          <tr><td style="padding:6px 8px;border:1px solid #eee">Cost of Goods Sold</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right">${fmt(fin.cogs)}</td></tr>
+          <tr style="background:#f0fdf4"><td style="padding:6px 8px;border:1px solid #eee;font-weight:700">Gross Profit</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:700;color:${fin.grossProfit >= 0 ? '#16a34a' : '#dc2626'}">${fmt(fin.grossProfit)}</td></tr>
+          <tr><td style="padding:6px 8px;border:1px solid #eee">Operating Expenses</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right">${fmt(fin.opex)}</td></tr>
+          <tr style="background:#f0fdf4"><td style="padding:6px 8px;border:1px solid #eee;font-weight:700">Net Profit</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:700;color:${fin.netProfit >= 0 ? '#16a34a' : '#dc2626'}">${fmt(fin.netProfit)}</td></tr>
+        </table>
+      </div>
+      ${expCatRows.length ? `<div style="margin-top:18px">
+        <div style="font-weight:700;margin-bottom:8px;color:#C8252A">Expenses by Category</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+          <tr style="background:#f9f9f9"><th style="padding:6px 8px;border:1px solid #eee;text-align:left">Category</th><th style="padding:6px 8px;border:1px solid #eee;text-align:right">Amount (KSh)</th></tr>
+          ${expCatRows.map(([cat, val]) => `<tr><td style="padding:6px 8px;border:1px solid #eee">${cat}</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:600">${fmt(val)}</td></tr>`).join('')}
+        </table>
+      </div>` : ''}
     </div>`;
   if (typeof html2pdf !== 'undefined') {
     const el = document.createElement('div');
@@ -4276,6 +4795,7 @@ const MODULE_PAGE_MAP = {
   'mod-pos-payments':  { page:'invoices',  label:'Manage Payments'      },
   'mod-pos-analytics': { page:'analytics', label:'View Analytics'       },
   'mod-pos-inventory': { page:'inventory', label:'View Inventory'       },
+  'mod-pos-expenses':  { page:'expenses',  label:'Track Expenses'       },
   'mod-pos-services':  { page:'services',  label:'Manage Services'      },
   'mod-pos-mpesa':     { page:'pos',       label:'Use M-Pesa STK'       },
   'mod-pos-email':     { page:'pos',       label:'Email Invoices'       },
