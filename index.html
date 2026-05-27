@@ -323,8 +323,15 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
       onkeydown="if(event.key==='Enter')document.getElementById('ep-password').focus()"/>
 
     <div class="ep-label" style="margin-top:14px">PASSWORD</div>
-    <input class="ep-input" type="password" id="ep-password" placeholder="Enter your password"
-      onkeydown="if(event.key==='Enter')epLogin()"/>
+    <div style="position:relative">
+      <input class="ep-input" type="password" id="ep-password" placeholder="Enter your password"
+        onkeydown="if(event.key==='Enter')epLogin()" style="padding-right:44px"/>
+      <button type="button" onclick="(function(){var i=document.getElementById('ep-password'),b=document.getElementById('ep-pw-eye');i.type=i.type==='password'?'text':'password';b.className='ti '+(i.type==='password'?'ti-eye':'ti-eye-off')})()"
+        style="position:absolute;right:0;top:0;bottom:0;width:42px;background:none;border:none;cursor:pointer;color:#5a9a5a;display:flex;align-items:center;justify-content:center;font-size:17px;transition:color .15s"
+        onmouseover="this.style.color='#00A550'" onmouseout="this.style.color='#5a9a5a'">
+        <i id="ep-pw-eye" class="ti ti-eye"></i>
+      </button>
+    </div>
 
     <button class="ep-btn" id="ep-login-btn" onclick="epLogin()">Sign In →</button>
     <div class="ep-err" id="ep-err"></div>
