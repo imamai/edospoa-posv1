@@ -742,6 +742,10 @@ async function dbInsertPayment(p) {
   if (!useSupabase) return;
   await sb.from('payments').upsert({ id: p.id, shop_id: currentShopId, invoice_id: p.invoiceId, amount: p.amount, method: p.method, note: p.note, paid_at: p.paidAt });
 }
+async function dbDeletePayment(id) {
+  if (!useSupabase) return;
+  await sb.from('payments').delete().eq('id', id).eq('shop_id', currentShopId);
+}
 async function dbInsertExpense(e) {
   if (!useSupabase) return;
   await sb.from('expenses').upsert({ id: e.id, shop_id: currentShopId, amount: e.amount, category: e.category, payee: e.payee, method: e.method, note: e.note, date: e.date });
@@ -1570,16 +1574,41 @@ function invDateToISO(s) {
 }
 
 // Period summary for current global periodFrom/periodTo (used by dashboard +
-// analytics). Returns revenue, expense breakdown, gross/net profit.
+// analytics). Returns two parallel profit views:
+//   • Expected — based on the BILLED amount (invoice totals). What you'd
+//     earn if every invoice in the period were paid in full.
+//   • Actual   — based on COLLECTED cash (sum of payments tied to those
+//     invoices, incl. partial/initial payments).
 function computeFinancials(periodInvList) {
   const revenue = periodInvList.reduce((s, i) => s + (i.total || 0), 0);
+  const periodInvIds = new Set(periodInvList.map(i => i.id));
+  const collected = payments
+    .filter(p => periodInvIds.has(p.invoiceId))
+    .reduce((s, p) => s + (p.amount || 0), 0);
+
   const expList = expensesInRange(periodFrom, periodTo);
   const cogs = expList.filter(e => e.category === COGS_CATEGORY).reduce((s, e) => s + (e.amount || 0), 0);
   const opex = expList.filter(e => e.category !== COGS_CATEGORY).reduce((s, e) => s + (e.amount || 0), 0);
   const totalExpenses = cogs + opex;
-  const grossProfit = revenue - cogs;
-  const netProfit   = grossProfit - opex;
-  return { revenue, cogs, opex, totalExpenses, grossProfit, netProfit, expCount: expList.length };
+
+  // Expected (accrual basis — invoiced)
+  const expectedGross = revenue   - cogs;
+  const expectedNet   = expectedGross - opex;
+  // Actual (cash basis — collected)
+  const actualGross   = collected - cogs;
+  const actualNet     = actualGross - opex;
+
+  return {
+    revenue, collected,
+    cogs, opex, totalExpenses,
+    expectedGross, expectedNet,
+    actualGross,   actualNet,
+    // Legacy aliases (older code paths may still read these — point at
+    // Expected so existing call sites keep their current meaning).
+    grossProfit: expectedGross,
+    netProfit:   expectedNet,
+    expCount: expList.length,
+  };
 }
 
 // ── Computed helpers ─────────────────────────────────────
@@ -1729,8 +1758,11 @@ function renderDashboard() {
   const fin = computeFinancials(periodInv);
   const isPeriod = !!(periodFrom || periodTo);
   const periodLabel = isPeriod ? `${periodFrom || 'start'} → ${periodTo || 'now'}` : 'All-time';
-  const grossMargin = fin.revenue ? Math.round(fin.grossProfit / fin.revenue * 100) : 0;
-  const netMargin   = fin.revenue ? Math.round(fin.netProfit   / fin.revenue * 100) : 0;
+  const expGrossMargin = fin.revenue   ? Math.round(fin.expectedGross / fin.revenue   * 100) : 0;
+  const expNetMargin   = fin.revenue   ? Math.round(fin.expectedNet   / fin.revenue   * 100) : 0;
+  const actGrossMargin = fin.collected ? Math.round(fin.actualGross   / fin.collected * 100) : 0;
+  const actNetMargin   = fin.collected ? Math.round(fin.actualNet     / fin.collected * 100) : 0;
+  const collectionRate = fin.revenue   ? Math.round(fin.collected     / fin.revenue   * 100) : 0;
 
   document.getElementById('page-dashboard').innerHTML = `
     <div class="stats-grid">
@@ -1748,12 +1780,31 @@ function renderDashboard() {
         <div class="card-title" style="margin:0"><i class="ti ti-trending-up" style="color:var(--green)"></i> Profitability <span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:6px">${periodLabel}</span></div>
         ${hasPerm('exp.view') ? `<button class="btn btn-sm btn-outline" onclick="nav('expenses',1)" title="Open expenses"><i class="ti ti-cash-banknote-off"></i> Manage Expenses</button>` : ''}
       </div>
-      <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
-        <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Revenue</div><div class="stat-value">${fmt(fin.revenue)}</div><div class="stat-sub">${periodInv.length} invoice${periodInv.length === 1 ? '' : 's'}</div></div>
+
+      <!-- Cost row -->
+      <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
+        <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Billed (Revenue)</div><div class="stat-value">${fmt(fin.revenue)}</div><div class="stat-sub">${periodInv.length} invoice${periodInv.length === 1 ? '' : 's'}</div></div>
+        <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Collected (Cash)</div><div class="stat-value">${fmt(fin.collected)}</div><div class="stat-sub">${collectionRate}% of billed</div></div>
         <div class="stat-card" style="border-top-color:#f59e0b"><div class="stat-label">Cost of Goods</div><div class="stat-value">${fmt(fin.cogs)}</div><div class="stat-sub">Direct costs</div></div>
-        <div class="stat-card" style="border-top-color:#0ea5e9"><div class="stat-label">Gross Profit</div><div class="stat-value" style="color:${fin.grossProfit >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.grossProfit)}</div><div class="stat-sub">${grossMargin}% margin</div></div>
         <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Operating Expenses</div><div class="stat-value">${fmt(fin.opex)}</div><div class="stat-sub">${fin.expCount} expense${fin.expCount === 1 ? '' : 's'}</div></div>
-        <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Net Profit</div><div class="stat-value" style="color:${fin.netProfit >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.netProfit)}</div><div class="stat-sub">${netMargin}% margin</div></div>
+      </div>
+
+      <!-- Expected (billed) vs Actual (collected) -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
+        <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:#fafaf8">
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px"><i class="ti ti-file-invoice"></i> Expected (Billed Basis)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div class="stat-card" style="border-top-color:#0ea5e9"><div class="stat-label">Expected Gross Profit</div><div class="stat-value" style="color:${fin.expectedGross >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.expectedGross)}</div><div class="stat-sub">${expGrossMargin}% margin</div></div>
+            <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Expected Net Profit</div><div class="stat-value" style="color:${fin.expectedNet >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.expectedNet)}</div><div class="stat-sub">${expNetMargin}% margin</div></div>
+          </div>
+        </div>
+        <div style="border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;background:#f0fdf4">
+          <div style="font-size:10px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px"><i class="ti ti-cash"></i> Actual (Cash Basis)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div class="stat-card" style="border-top-color:#0ea5e9"><div class="stat-label">Actual Gross Profit</div><div class="stat-value" style="color:${fin.actualGross >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.actualGross)}</div><div class="stat-sub">${actGrossMargin}% margin</div></div>
+            <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Actual Net Profit</div><div class="stat-value" style="color:${fin.actualNet >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.actualNet)}</div><div class="stat-sub">${actNetMargin}% margin</div></div>
+          </div>
+        </div>
       </div>
     </div>
     <div class="two-col" style="margin-bottom:14px">
@@ -2588,9 +2639,13 @@ function showInvoice(idOrInv) {
     <div style="margin-top:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px">
       <div style="font-size:10px;font-weight:600;color:#166534;margin-bottom:6px;text-transform:uppercase">Payment History</div>
       ${pays.map(p => `<div class="pay-history-item">
-        <span style="color:var(--muted);font-size:10px">${p.paidAt}</span>
-        <span style="text-transform:capitalize">${p.method}${p.note ? ' — ' + p.note : ''}</span>
-        <span style="font-weight:600;color:var(--green)">${fmt(p.amount)}</span>
+        <span style="color:var(--muted);font-size:10px;flex:0 0 auto">${p.paidAt}</span>
+        <span style="text-transform:capitalize;flex:1;padding:0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.method}${p.note ? ' — ' + p.note : ''}</span>
+        <span style="font-weight:600;color:var(--green);margin-right:6px">${fmt(p.amount)}</span>
+        ${hasPerm('inv.record_payment') ? `
+          <button class="btn btn-sm btn-outline" style="padding:2px 6px;font-size:10px;margin-right:3px" onclick="openEditPaymentModal('${p.id}')" title="Edit payment"><i class="ti ti-pencil" style="font-size:11px"></i></button>
+          <button class="btn btn-sm" style="padding:2px 6px;font-size:10px;background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deletePayment('${p.id}')" title="Delete payment"><i class="ti ti-trash" style="font-size:11px"></i></button>
+        ` : ''}
       </div>`).join('')}
       <div style="display:flex;justify-content:space-between;padding-top:6px;margin-top:4px;border-top:1px solid #bbf7d0;font-size:11px;font-weight:600;color:#166534">
         <span>Total Paid</span><span>${fmt(totalPaid)}</span>
@@ -2907,6 +2962,128 @@ async function markFullyPaid(id) {
   }
   inv.status = 'Paid'; await dbUpdateInvoice(inv);
   closeModal('inv-modal'); showInvoice(id); renderDashboard();
+}
+
+// ── EDIT / DELETE A RECORDED PAYMENT ─────────────────────
+// Parse the stored "DD MMM YYYY HH:MM" paidAt string back into ISO date + time
+// values so they can pre-fill <input type="date"> / <input type="time">.
+function _splitPaidAt(s) {
+  if (!s) return { date: '', time: '' };
+  const parts = String(s).split(' ');
+  // parts: ["15", "Mar", "2026", "10:30"]
+  if (parts.length < 3) return { date: '', time: '' };
+  const day = parts[0].padStart(2, '0');
+  const mon = INV_MONTHS[parts[1]];
+  const year = parts[2];
+  const time = parts[3] || '12:00';
+  if (mon == null || !year) return { date: '', time };
+  return { date: `${year}-${String(mon + 1).padStart(2, '0')}-${day}`, time };
+}
+
+function openEditPaymentModal(payId) {
+  if (!hasPerm('inv.record_payment')) { alert('You do not have permission to edit payments.'); return; }
+  const p = payments.find(x => x.id === payId); if (!p) { alert('Payment not found.'); return; }
+  const inv = invoices.find(i => i.id === p.invoiceId); if (!inv) { alert('Linked invoice not found.'); return; }
+  // Balance available if we removed this payment: current balance + this payment amount
+  const balanceWithoutThis = invBalance(inv) + p.amount;
+  const { date: dDate, time: dTime } = _splitPaidAt(p.paidAt);
+  const methodOpts = ['cash','mpesa','bank'].map(m => `<option value="${m}" ${p.method === m ? 'selected' : ''}>${m === 'mpesa' ? 'M-Pesa' : m === 'bank' ? 'Bank Transfer' : 'Cash'}</option>`).join('');
+
+  document.getElementById('payment-modal-body').innerHTML = `
+    <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:10px;margin-bottom:14px;font-size:12px;color:#92400e">
+      <i class="ti ti-pencil"></i> Editing recorded payment on <strong>${inv.id}</strong> — ${inv.clientName}
+    </div>
+    <div style="background:#f8f8f6;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:14px;font-size:12px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--muted)">Invoice Total</span><span>${fmt(inv.total)}</span></div>
+      <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Max for this payment</span><span style="font-weight:700;color:#dc2626">${fmt(balanceWithoutThis)}</span></div>
+    </div>
+    <div style="display:grid;gap:10px">
+      <input type="hidden" id="pay-edit-id" value="${p.id}"/>
+      <div><label>Payment Amount (KSh) *</label><input type="number" id="pay-amount" min="1" max="${balanceWithoutThis}" step="0.01" value="${p.amount}"/></div>
+      <div><label>Payment Method</label>
+        <select id="pay-method" onchange="updatePaymentDetails()">${methodOpts}</select>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div><label>Payment Date *</label><input type="date" id="pay-date" value="${dDate}"/></div>
+        <div><label>Payment Time</label><input type="time" id="pay-time" value="${dTime}"/></div>
+      </div>
+      <div id="payment-details-box"></div>
+      <div><label>Note / Reference</label><input id="pay-note" value="${(p.note || '').replace(/"/g, '&quot;')}" placeholder="e.g. Balance, M-Pesa ref NKW1234…"/></div>
+      <button class="btn btn-green" style="width:100%;justify-content:center" onclick="updatePayment()"><i class="ti ti-check"></i> Update Payment</button>
+    </div>`;
+  closeModal('inv-modal');
+  openModal('payment-modal');
+  setTimeout(updatePaymentDetails, 100);
+}
+
+async function updatePayment() {
+  const payId = document.getElementById('pay-edit-id')?.value;
+  if (!payId) { alert('Missing payment id.'); return; }
+  const p = payments.find(x => x.id === payId); if (!p) { alert('Payment not found.'); return; }
+  const inv = invoices.find(i => i.id === p.invoiceId); if (!inv) { alert('Linked invoice not found.'); return; }
+
+  const amount = parseFloat(document.getElementById('pay-amount').value) || 0;
+  if (amount <= 0) { alert('Enter a valid amount.'); return; }
+  const method = document.getElementById('pay-method').value;
+  const note   = document.getElementById('pay-note').value.trim();
+  const dateVal = document.getElementById('pay-date')?.value;
+  const timeVal = document.getElementById('pay-time')?.value;
+  if (!dateVal) { alert('Please pick a payment date.'); return; }
+  const dt = new Date(dateVal + 'T' + (timeVal || '12:00'));
+  if (isNaN(dt)) { alert('Invalid payment date/time.'); return; }
+
+  // Ensure the new amount doesn't overpay the invoice
+  const otherPaid = invPayments(inv.id).filter(x => x.id !== p.id).reduce((s, x) => s + x.amount, 0);
+  if (amount + otherPaid > inv.total + 0.01) {
+    alert(`Amount exceeds invoice total. Other payments already total ${fmt(otherPaid)}; max for this one is ${fmt(inv.total - otherPaid)}.`);
+    return;
+  }
+
+  p.amount = amount;
+  p.method = method;
+  p.note   = note;
+  p.paidAt = dateStr(dt) + ' ' + timeStr(dt);
+  await dbInsertPayment(p); // upsert handles update
+
+  // Recompute invoice status based on new totals
+  const newBal = invBalance(inv);
+  if (inv.payMethod !== 'credit') {
+    inv.status = newBal <= 0 ? 'Paid' : 'Partial';
+  } else {
+    if (newBal <= 0) inv.status = 'Paid';
+    else if (otherPaid + amount > 0) inv.status = 'Partial';
+    else inv.status = 'Unpaid';
+  }
+  await dbUpdateInvoice(inv);
+
+  closeModal('payment-modal');
+  showInvoice(inv.id);
+  renderDashboard();
+}
+
+async function deletePayment(payId) {
+  if (!hasPerm('inv.record_payment')) { alert('You do not have permission to delete payments.'); return; }
+  const p = payments.find(x => x.id === payId); if (!p) return;
+  const inv = invoices.find(i => i.id === p.invoiceId);
+  if (!confirm(`Delete this payment of ${fmt(p.amount)} (${p.method})? This cannot be undone.`)) return;
+
+  payments = payments.filter(x => x.id !== payId);
+  await dbDeletePayment(payId);
+
+  // Recompute invoice status after removal
+  if (inv) {
+    const remaining = invPayments(inv.id).reduce((s, x) => s + x.amount, 0);
+    if (inv.payMethod !== 'credit') {
+      inv.status = remaining <= 0 ? 'Unpaid' : (invBalance(inv) <= 0 ? 'Paid' : 'Partial');
+    } else {
+      if (invBalance(inv) <= 0) inv.status = 'Paid';
+      else if (remaining > 0) inv.status = 'Partial';
+      else inv.status = 'Unpaid';
+    }
+    await dbUpdateInvoice(inv);
+    showInvoice(inv.id);
+  }
+  renderDashboard();
 }
 
 // ── WHATSAPP ─────────────────────────────────────────────
@@ -3473,8 +3650,11 @@ function renderAnalytics() {
 
   // Profitability — uses same period filter
   const fin = computeFinancials(filtered);
-  const grossMargin = fin.revenue ? Math.round(fin.grossProfit / fin.revenue * 100) : 0;
-  const netMargin   = fin.revenue ? Math.round(fin.netProfit   / fin.revenue * 100) : 0;
+  const expGrossMargin = fin.revenue   ? Math.round(fin.expectedGross / fin.revenue   * 100) : 0;
+  const expNetMargin   = fin.revenue   ? Math.round(fin.expectedNet   / fin.revenue   * 100) : 0;
+  const actGrossMargin = fin.collected ? Math.round(fin.actualGross   / fin.collected * 100) : 0;
+  const actNetMargin   = fin.collected ? Math.round(fin.actualNet     / fin.collected * 100) : 0;
+  const collectionRate = fin.revenue   ? Math.round(fin.collected     / fin.revenue   * 100) : 0;
 
   // Expense breakdown by category (in current period)
   const expList = expensesInRange(periodFrom, periodTo);
@@ -3526,12 +3706,32 @@ function renderAnalytics() {
     <!-- Profitability cards -->
     <div class="card" style="margin-bottom:14px;padding:14px 16px">
       <div class="card-title" style="margin-bottom:10px"><i class="ti ti-trending-up" style="color:var(--green)"></i> Profitability</div>
-      <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
+
+      <!-- Inputs row -->
+      <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
+        <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Billed (Revenue)</div><div class="stat-value">${fmt(fin.revenue)}</div><div class="stat-sub">${filtered.length} invoice${filtered.length === 1 ? '' : 's'}</div></div>
+        <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Collected (Cash)</div><div class="stat-value">${fmt(fin.collected)}</div><div class="stat-sub">${collectionRate}% of billed</div></div>
         <div class="stat-card" style="border-top-color:#f59e0b"><div class="stat-label">Cost of Goods</div><div class="stat-value">${fmt(fin.cogs)}</div><div class="stat-sub">Direct costs</div></div>
-        <div class="stat-card" style="border-top-color:#0ea5e9"><div class="stat-label">Gross Profit</div><div class="stat-value" style="color:${fin.grossProfit >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.grossProfit)}</div><div class="stat-sub">${grossMargin}% margin</div></div>
-        <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Operating Expenses</div><div class="stat-value">${fmt(fin.opex)}</div><div class="stat-sub">${fin.expCount - (expByCat[COGS_CATEGORY] ? expList.filter(e => e.category === COGS_CATEGORY).length : 0)} entries</div></div>
-        <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Net Profit</div><div class="stat-value" style="color:${fin.netProfit >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.netProfit)}</div><div class="stat-sub">${netMargin}% margin</div></div>
+        <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Operating Expenses</div><div class="stat-value">${fmt(fin.opex)}</div><div class="stat-sub">${fin.expCount - expList.filter(e => e.category === COGS_CATEGORY).length} entries</div></div>
         <div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">Total Expenses</div><div class="stat-value">${fmt(fin.totalExpenses)}</div><div class="stat-sub">${fin.expCount} entries</div></div>
+      </div>
+
+      <!-- Expected vs Actual -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
+        <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:#fafaf8">
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px"><i class="ti ti-file-invoice"></i> Expected (Billed Basis)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div class="stat-card" style="border-top-color:#0ea5e9"><div class="stat-label">Expected Gross Profit</div><div class="stat-value" style="color:${fin.expectedGross >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.expectedGross)}</div><div class="stat-sub">${expGrossMargin}% margin</div></div>
+            <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Expected Net Profit</div><div class="stat-value" style="color:${fin.expectedNet >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.expectedNet)}</div><div class="stat-sub">${expNetMargin}% margin</div></div>
+          </div>
+        </div>
+        <div style="border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;background:#f0fdf4">
+          <div style="font-size:10px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px"><i class="ti ti-cash"></i> Actual (Cash Basis)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div class="stat-card" style="border-top-color:#0ea5e9"><div class="stat-label">Actual Gross Profit</div><div class="stat-value" style="color:${fin.actualGross >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.actualGross)}</div><div class="stat-sub">${actGrossMargin}% margin</div></div>
+            <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Actual Net Profit</div><div class="stat-value" style="color:${fin.actualNet >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.actualNet)}</div><div class="stat-sub">${actNetMargin}% margin</div></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -3840,12 +4040,15 @@ function exportReportCSV() {
   rows.push([]);
   rows.push(['PROFITABILITY SUMMARY']);
   rows.push(['Metric','Amount (KSh)']);
-  rows.push(['Revenue', fin.revenue]);
+  rows.push(['Billed (Revenue)', fin.revenue]);
+  rows.push(['Collected (Cash)', fin.collected]);
   rows.push(['Cost of Goods Sold', fin.cogs]);
-  rows.push(['Gross Profit', fin.grossProfit]);
   rows.push(['Operating Expenses', fin.opex]);
   rows.push(['Total Expenses', fin.totalExpenses]);
-  rows.push(['Net Profit', fin.netProfit]);
+  rows.push(['Expected Gross Profit (billed - COGS)', fin.expectedGross]);
+  rows.push(['Expected Net Profit (billed - all expenses)', fin.expectedNet]);
+  rows.push(['Actual Gross Profit (collected - COGS)', fin.actualGross]);
+  rows.push(['Actual Net Profit (collected - all expenses)', fin.actualNet]);
   const csv = rows.map(r => r.map(v => `"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob(['﻿'+csv], { type:'text/csv;charset=utf-8' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `edospoa-report-${periodFrom||'all'}.csv`; a.click();
@@ -3908,12 +4111,15 @@ function exportReportXLSX() {
   // Sheet 5 — Profitability
   const fin = computeFinancials(filtered);
   const profData = [
-    { Metric: 'Revenue',             'Amount (KSh)': fin.revenue       },
-    { Metric: 'Cost of Goods Sold',  'Amount (KSh)': fin.cogs          },
-    { Metric: 'Gross Profit',        'Amount (KSh)': fin.grossProfit   },
-    { Metric: 'Operating Expenses',  'Amount (KSh)': fin.opex          },
-    { Metric: 'Total Expenses',      'Amount (KSh)': fin.totalExpenses },
-    { Metric: 'Net Profit',          'Amount (KSh)': fin.netProfit     },
+    { Metric: 'Billed (Revenue)',                          'Amount (KSh)': fin.revenue       },
+    { Metric: 'Collected (Cash)',                          'Amount (KSh)': fin.collected     },
+    { Metric: 'Cost of Goods Sold',                        'Amount (KSh)': fin.cogs          },
+    { Metric: 'Operating Expenses',                        'Amount (KSh)': fin.opex          },
+    { Metric: 'Total Expenses',                            'Amount (KSh)': fin.totalExpenses },
+    { Metric: 'Expected Gross Profit (billed - COGS)',     'Amount (KSh)': fin.expectedGross },
+    { Metric: 'Expected Net Profit (billed - all exp.)',   'Amount (KSh)': fin.expectedNet   },
+    { Metric: 'Actual Gross Profit (collected - COGS)',    'Amount (KSh)': fin.actualGross   },
+    { Metric: 'Actual Net Profit (collected - all exp.)',  'Amount (KSh)': fin.actualNet     },
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(profData), 'Profitability');
 
@@ -3978,11 +4184,14 @@ function exportReportPDF() {
         <div style="font-weight:700;margin-bottom:8px;color:#C8252A">Profitability Summary</div>
         <table style="width:100%;border-collapse:collapse;font-size:11px">
           <tr style="background:#f9f9f9"><th style="padding:6px 8px;border:1px solid #eee;text-align:left">Metric</th><th style="padding:6px 8px;border:1px solid #eee;text-align:right">Amount (KSh)</th></tr>
-          <tr><td style="padding:6px 8px;border:1px solid #eee">Revenue</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:600">${fmt(fin.revenue)}</td></tr>
+          <tr><td style="padding:6px 8px;border:1px solid #eee">Billed (Revenue)</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:600">${fmt(fin.revenue)}</td></tr>
+          <tr><td style="padding:6px 8px;border:1px solid #eee">Collected (Cash)</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:600">${fmt(fin.collected)}</td></tr>
           <tr><td style="padding:6px 8px;border:1px solid #eee">Cost of Goods Sold</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right">${fmt(fin.cogs)}</td></tr>
-          <tr style="background:#f0fdf4"><td style="padding:6px 8px;border:1px solid #eee;font-weight:700">Gross Profit</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:700;color:${fin.grossProfit >= 0 ? '#16a34a' : '#dc2626'}">${fmt(fin.grossProfit)}</td></tr>
           <tr><td style="padding:6px 8px;border:1px solid #eee">Operating Expenses</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right">${fmt(fin.opex)}</td></tr>
-          <tr style="background:#f0fdf4"><td style="padding:6px 8px;border:1px solid #eee;font-weight:700">Net Profit</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:700;color:${fin.netProfit >= 0 ? '#16a34a' : '#dc2626'}">${fmt(fin.netProfit)}</td></tr>
+          <tr style="background:#eff6ff"><td style="padding:6px 8px;border:1px solid #eee;font-weight:700">Expected Gross Profit</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:700;color:${fin.expectedGross >= 0 ? '#16a34a' : '#dc2626'}">${fmt(fin.expectedGross)}</td></tr>
+          <tr style="background:#eff6ff"><td style="padding:6px 8px;border:1px solid #eee;font-weight:700">Expected Net Profit</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:700;color:${fin.expectedNet >= 0 ? '#16a34a' : '#dc2626'}">${fmt(fin.expectedNet)}</td></tr>
+          <tr style="background:#f0fdf4"><td style="padding:6px 8px;border:1px solid #eee;font-weight:700">Actual Gross Profit</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:700;color:${fin.actualGross >= 0 ? '#16a34a' : '#dc2626'}">${fmt(fin.actualGross)}</td></tr>
+          <tr style="background:#f0fdf4"><td style="padding:6px 8px;border:1px solid #eee;font-weight:700">Actual Net Profit</td><td style="padding:6px 8px;border:1px solid #eee;text-align:right;font-weight:700;color:${fin.actualNet >= 0 ? '#16a34a' : '#dc2626'}">${fmt(fin.actualNet)}</td></tr>
         </table>
       </div>
       ${expCatRows.length ? `<div style="margin-top:18px">
