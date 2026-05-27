@@ -85,6 +85,29 @@ body{background:var(--page-bg);color:var(--text);font-size:13px}
 .badge-blue{background:#dbeafe;color:#1e40af}
 .badge-purple{background:#ede9fe;color:#6d28d9}
 .badge-gray{background:#f3f4f6;color:#4b5563}
+/* ── Document Tabs ── */
+.doc-tabs{display:flex;border-bottom:2px solid var(--border);margin-bottom:14px;gap:0}
+.doc-tab{display:flex;align-items:center;gap:7px;padding:9px 18px;font-size:12px;font-weight:500;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s;white-space:nowrap;user-select:none}
+.doc-tab:hover{color:var(--text);background:#f5f5f3;border-radius:6px 6px 0 0}
+.doc-tab.active-inv{color:var(--blue);border-bottom-color:var(--blue);font-weight:600}
+.doc-tab.active-qt{color:#d97706;border-bottom-color:#d97706;font-weight:600}
+.doc-tab.active-all{color:var(--red);border-bottom-color:var(--red);font-weight:600}
+.doc-tab .tab-count{background:#f0f0ee;color:var(--muted);border-radius:10px;padding:1px 7px;font-size:10px;font-weight:600}
+.doc-tab.active-inv .tab-count{background:#dbeafe;color:#1e40af}
+.doc-tab.active-qt .tab-count{background:#fef9c3;color:#854d0e}
+.doc-tab.active-all .tab-count{background:#fee2e2;color:#991b1b}
+/* Status sub-filter pills */
+.status-pills{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+.status-pill{padding:4px 12px;border-radius:20px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:#fff;color:var(--muted);transition:all .12s}
+.status-pill:hover{border-color:#aaa;color:var(--text)}
+.status-pill.active{border-color:transparent}
+.sp-all.active{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
+.sp-paid.active{background:#dcfce7;color:#166534;border-color:#86efac}
+.sp-partial.active{background:#fef9c3;color:#854d0e;border-color:#fde68a}
+.sp-unpaid.active{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
+.sp-pending.active{background:#dbeafe;color:#1e40af;border-color:#93c5fd}
+.sp-converted.active{background:#dcfce7;color:#166534;border-color:#86efac}
+.sp-expired.active{background:#f3f4f6;color:#4b5563;border-color:#d1d5db}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 input,select,textarea{background:#fff;border:1px solid var(--border);border-radius:7px;padding:8px 10px;color:var(--text);font-size:12px;width:100%}
@@ -3128,71 +3151,231 @@ async function sendInvoiceViaEmail(invId, email, clientName) {
 
 // ── INVOICES PAGE ────────────────────────────────────────
 function renderInvoices() {
-  // Department-based access control — restrict to user's assigned depts
+  // ── Department-based access control ──────────────────────
   const allowedDepts = currentUser?.allowedDepts || null;
-  let filtered = invoices.filter(i => {
+  const allDocs = invoices.filter(i => {
     if (!allowedDepts) return true;
     return i.dept && i.dept.some(d => allowedDepts.includes(d));
   });
 
-  // Type filter: invoices vs quotations
-  if (invTypeFilter === 'invoices')   filtered = filtered.filter(i => i.type !== 'quotation');
+  // ── Tab counts (always over full set, unaffected by filters) ──
+  const countAll  = allDocs.length;
+  const countInv  = allDocs.filter(i => i.type !== 'quotation').length;
+  const countQt   = allDocs.filter(i => i.type === 'quotation').length;
+
+  // ── Type filter ───────────────────────────────────────────
+  let filtered = [...allDocs];
+  if (invTypeFilter === 'invoices')    filtered = filtered.filter(i => i.type !== 'quotation');
   else if (invTypeFilter === 'quotations') filtered = filtered.filter(i => i.type === 'quotation');
 
-  // Status filter (only for invoices, not quotations)
-  if (invFilter === 'paid')    filtered = filtered.filter(i => invStatus(i) === 'Paid');
-  else if (invFilter === 'partial') filtered = filtered.filter(i => invStatus(i) === 'Partial');
-  else if (invFilter === 'unpaid')  filtered = filtered.filter(i => invStatus(i) === 'Unpaid');
+  // ── Status sub-filter ─────────────────────────────────────
+  const isQtTab  = invTypeFilter === 'quotations';
+  const isInvTab = invTypeFilter === 'invoices';
+  const isMixed  = invTypeFilter === 'all';
 
+  if (isQtTab) {
+    if (invFilter === 'pending')   filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'pending');
+    else if (invFilter === 'converted') filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'converted');
+    else if (invFilter === 'expired')   filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'expired');
+  } else {
+    if (invFilter === 'paid')    filtered = filtered.filter(i => i.type !== 'quotation' && invStatus(i) === 'Paid');
+    else if (invFilter === 'partial') filtered = filtered.filter(i => i.type !== 'quotation' && invStatus(i) === 'Partial');
+    else if (invFilter === 'unpaid')  filtered = filtered.filter(i => i.type !== 'quotation' && invStatus(i) === 'Unpaid');
+  }
+
+  // ── Search ────────────────────────────────────────────────
   if (invSearch) filtered = filtered.filter(i =>
     i.clientName.toLowerCase().includes(invSearch.toLowerCase()) ||
     i.id.toLowerCase().includes(invSearch.toLowerCase()) ||
     (i.clientPhone && i.clientPhone.includes(invSearch))
   );
 
-  const isQuotView = invTypeFilter === 'quotations';
+  const rows = [...filtered].reverse();
+
+  // ── Column definitions per tab ────────────────────────────
+  // Invoices: Number | Client | Phone | Total | Paid | Balance | Status | Dept | Date | Actions
+  // Quotations: Number | Client | Phone | Total | Valid Until | Status | Dept | Date | Actions
+  // All: Number | Type | Client | Phone | Total | Paid/Balance* | Status | Dept | Date | Actions
+  //      (* paid/balance only for invoice rows; quotation rows show —)
+
+  const colspanEmpty = isQtTab ? 9 : (isMixed ? 11 : 10);
+
+  // ── Status pills ──────────────────────────────────────────
+  let pills = '';
+  if (isQtTab) {
+    const pDefs = [
+      {k:'all',    label:'All',       cls:'sp-all'},
+      {k:'pending', label:'Pending',  cls:'sp-pending'},
+      {k:'converted',label:'Converted',cls:'sp-converted'},
+      {k:'expired', label:'Expired',  cls:'sp-expired'},
+    ];
+    pills = `<div class="status-pills">
+      <span style="font-size:11px;color:var(--muted);margin-right:2px">Filter:</span>
+      ${pDefs.map(p=>`<span class="status-pill ${p.cls}${invFilter===p.k?' active':''}" onclick="setInvFilter('${p.k}')">${p.label}</span>`).join('')}
+    </div>`;
+  } else {
+    const pDefs = [
+      {k:'all',     label:'All',      cls:'sp-all'},
+      {k:'paid',    label:'Paid',     cls:'sp-paid'},
+      {k:'partial', label:'Partial',  cls:'sp-partial'},
+      {k:'unpaid',  label:'Unpaid',   cls:'sp-unpaid'},
+    ];
+    pills = `<div class="status-pills">
+      <span style="font-size:11px;color:var(--muted);margin-right:2px">Filter:</span>
+      ${pDefs.map(p=>`<span class="status-pill ${p.cls}${invFilter===p.k?' active':''}" onclick="setInvFilter('${p.k}')">${p.label}</span>`).join('')}
+    </div>`;
+  }
+
+  // ── Table header ──────────────────────────────────────────
+  let thead = '';
+  if (isInvTab) {
+    thead = `<tr>
+      <th>Number</th><th>Client</th><th>Phone</th>
+      <th style="text-align:right">Total</th>
+      <th style="text-align:right">Paid</th>
+      <th style="text-align:right">Balance</th>
+      <th>Status</th><th>Dept</th><th>Date</th><th></th>
+    </tr>`;
+  } else if (isQtTab) {
+    thead = `<tr>
+      <th>Number</th><th>Client</th><th>Phone</th>
+      <th style="text-align:right">Amount</th>
+      <th>Valid Until</th>
+      <th>Status</th><th>Dept</th><th>Date</th><th></th>
+    </tr>`;
+  } else {
+    thead = `<tr>
+      <th>Number</th><th>Type</th><th>Client</th><th>Phone</th>
+      <th style="text-align:right">Total</th>
+      <th style="text-align:right">Paid</th>
+      <th style="text-align:right">Balance</th>
+      <th>Status</th><th>Dept</th><th>Date</th><th></th>
+    </tr>`;
+  }
+
+  // ── Row builder ───────────────────────────────────────────
+  function buildRow(i) {
+    const isQt = i.type === 'quotation';
+    const st   = isQt ? (i.status || 'Pending') : invStatus(i);
+    const paid = isQt ? 0 : invPaid(i);
+    const bal  = isQt ? i.total : invBalance(i);
+    const deptNames = (i.dept||[]).map(d => (DEPTS.find(x=>x.id===d)||{name:d}).name).join(', ');
+
+    // Status badge colour
+    const stLower = st.toLowerCase();
+    const stClass = stLower==='paid'?'badge-green'
+      : stLower==='partial'?'badge-amber'
+      : stLower==='converted'?'badge-green'
+      : stLower==='pending'?'badge-blue'
+      : stLower==='expired'?'badge-gray'
+      : 'badge-red'; // Unpaid
+
+    // Valid until (30 days from quotation date)
+    const validUntil = (() => {
+      if (!isQt) return '';
+      try {
+        const d = new Date(i.date); d.setDate(d.getDate() + 30);
+        return d.toLocaleDateString('en-KE', {day:'2-digit',month:'short',year:'numeric'});
+      } catch { return '—'; }
+    })();
+
+    // Quotation link badge — shows if quotation has linked invoice or vice-versa
+    const linkBadge = isQt && i.invoiceRef
+      ? `<span title="Converted → ${i.invoiceRef}" style="font-size:9px;background:#dcfce7;color:#166534;border-radius:4px;padding:1px 5px;margin-left:4px;cursor:default">→ ${i.invoiceRef}</span>`
+      : (!isQt && i.quotationRef
+        ? `<span title="From ${i.quotationRef}" style="font-size:9px;background:#ede9fe;color:#6d28d9;border-radius:4px;padding:1px 5px;margin-left:4px;cursor:default">QT ${i.quotationRef.match(/-(\d+)$/)?.[1]||''}</span>`
+        : '');
+
+    if (isInvTab) {
+      return `<tr style="cursor:pointer" onclick="openInvoice('${i.id}')">
+        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${i.id}${linkBadge}</td>
+        <td style="font-weight:500">${i.clientName}</td>
+        <td style="color:var(--muted);font-size:11px">${i.clientPhone||'—'}</td>
+        <td style="text-align:right;font-weight:600">${fmt(i.total)}</td>
+        <td style="text-align:right;color:var(--green);font-weight:500">${fmt(paid)}</td>
+        <td style="text-align:right;color:${bal>0?'#dc2626':'var(--green)'};font-weight:${bal>0?'600':'400'}">${fmt(bal)}</td>
+        <td><span class="badge ${stClass}">${st}</span></td>
+        <td style="font-size:10px;color:var(--muted)">${deptNames||'—'}</td>
+        <td style="color:var(--muted);font-size:11px">${i.date}</td>
+        <td onclick="event.stopPropagation()" style="white-space:nowrap">
+          ${bal>0 && hasPerm('inv.record_payment') ? `<button class="btn btn-sm btn-green" onclick="openPaymentModal('${i.id}')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>` : ''}
+          ${hasPerm('inv.delete') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="deleteInvoice('${i.id}')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>` : ''}
+        </td>
+      </tr>`;
+    } else if (isQtTab) {
+      return `<tr style="cursor:pointer" onclick="openInvoice('${i.id}')">
+        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${i.id}${linkBadge}</td>
+        <td style="font-weight:500">${i.clientName}</td>
+        <td style="color:var(--muted);font-size:11px">${i.clientPhone||'—'}</td>
+        <td style="text-align:right;font-weight:600">${fmt(i.total)}</td>
+        <td style="font-size:11px;color:var(--muted)">${validUntil}</td>
+        <td><span class="badge ${stClass}">${st.charAt(0).toUpperCase()+st.slice(1)}</span></td>
+        <td style="font-size:10px;color:var(--muted)">${deptNames||'—'}</td>
+        <td style="color:var(--muted);font-size:11px">${i.date}</td>
+        <td onclick="event.stopPropagation()" style="white-space:nowrap">
+          ${st.toLowerCase()==='pending' && hasPerm('inv.create') ? `<button class="btn btn-sm btn-green" style="margin-right:3px;font-size:10px" onclick="event.stopPropagation();convertQuotationToInvoice('${i.id}')" title="Convert to Invoice"><i class="ti ti-file-invoice"></i></button>` : ''}
+          ${hasPerm('inv.delete') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="event.stopPropagation();deleteInvoice('${i.id}')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>` : ''}
+        </td>
+      </tr>`;
+    } else {
+      // Mixed / All view
+      return `<tr style="cursor:pointer" onclick="openInvoice('${i.id}')">
+        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${i.id}${linkBadge}</td>
+        <td><span class="badge ${isQt?'badge-amber':'badge-blue'}" style="font-size:10px">${isQt?'Quote':'Invoice'}</span></td>
+        <td style="font-weight:500">${i.clientName}</td>
+        <td style="color:var(--muted);font-size:11px">${i.clientPhone||'—'}</td>
+        <td style="text-align:right;font-weight:600">${fmt(i.total)}</td>
+        <td style="text-align:right;color:var(--green);font-weight:500">${isQt?'—':fmt(paid)}</td>
+        <td style="text-align:right;color:${(!isQt&&bal>0)?'#dc2626':'var(--green)'};font-weight:${(!isQt&&bal>0)?'600':'400'}">${isQt?'—':fmt(bal)}</td>
+        <td><span class="badge ${stClass}">${st.charAt(0).toUpperCase()+st.slice(1)}</span></td>
+        <td style="font-size:10px;color:var(--muted)">${deptNames||'—'}</td>
+        <td style="color:var(--muted);font-size:11px">${i.date}</td>
+        <td onclick="event.stopPropagation()" style="white-space:nowrap">
+          ${!isQt && bal>0 && hasPerm('inv.record_payment') ? `<button class="btn btn-sm btn-green" onclick="openPaymentModal('${i.id}')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>` : ''}
+          ${isQt && (i.status||'').toLowerCase()==='pending' && hasPerm('inv.create') ? `<button class="btn btn-sm btn-green" style="margin-right:3px;font-size:10px" onclick="event.stopPropagation();convertQuotationToInvoice('${i.id}')" title="Convert to Invoice"><i class="ti ti-file-invoice"></i></button>` : ''}
+          ${hasPerm('inv.delete') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="event.stopPropagation();deleteInvoice('${i.id}')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>` : ''}
+        </td>
+      </tr>`;
+    }
+  }
+
+  // ── Active tab class helper ───────────────────────────────
+  const tabCls = t => `doc-tab${invTypeFilter===t ? (t==='invoices'?' active-inv':t==='quotations'?' active-qt':' active-all') : ''}`;
+
   document.getElementById('page-invoices').innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
-      <div style="display:flex;gap:5px;flex-wrap:wrap">
-        <button onclick="setInvTypeFilter('all')" class="btn btn-sm ${invTypeFilter==='all'?'btn-red':'btn-outline'}"><i class="ti ti-list"></i> All</button>
-        <button onclick="setInvTypeFilter('invoices')" class="btn btn-sm ${invTypeFilter==='invoices'?'btn-red':'btn-outline'}"><i class="ti ti-file-invoice"></i> Invoices</button>
-        <button onclick="setInvTypeFilter('quotations')" class="btn btn-sm ${invTypeFilter==='quotations'?'btn-amber':'btn-outline'}"><i class="ti ti-file-text"></i> Quotations</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:0">
+      <div class="doc-tabs" style="flex:1;min-width:0">
+        <div class="${tabCls('invoices')}" onclick="setInvTypeFilter('invoices')">
+          <i class="ti ti-file-invoice"></i> Invoices <span class="tab-count">${countInv}</span>
+        </div>
+        <div class="${tabCls('quotations')}" onclick="setInvTypeFilter('quotations')">
+          <i class="ti ti-file-text"></i> Quotations <span class="tab-count">${countQt}</span>
+        </div>
+        <div class="${tabCls('all')}" onclick="setInvTypeFilter('all')">
+          <i class="ti ti-list"></i> All <span class="tab-count">${countAll}</span>
+        </div>
       </div>
-      <div class="search-bar" style="width:220px;margin:0"><i class="ti ti-search"></i><input placeholder="Search…" value="${invSearch}" oninput="invSearch=this.value;renderInvoices()"/></div>
+      <div class="search-bar" style="width:220px;margin:0 0 14px 0"><i class="ti ti-search"></i><input placeholder="Search name, ID, phone…" value="${invSearch}" oninput="invSearch=this.value;renderInvoices()"/></div>
     </div>
-    ${invTypeFilter !== 'quotations' ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px">
-      ${['all','paid','partial','unpaid'].map(f =>
-        `<button onclick="setInvFilter('${f}')" class="btn btn-sm ${invFilter===f?'btn-red':'btn-outline'}">${f.charAt(0).toUpperCase()+f.slice(1)}</button>`
-      ).join('')}
-    </div>` : ''}
-    <div class="card"><div style="overflow-x:auto"><table class="table" style="width:100%;min-width:780px">
-      <thead><tr><th>Number</th><th>Type</th><th>Client</th><th>Phone</th><th>Total</th>${isQuotView ? '' : '<th>Paid</th><th>Balance</th>'}<th>Status</th><th>Dept</th><th>Date</th><th></th></tr></thead>
-      <tbody>${!filtered.length
-        ? `<tr><td colspan="${isQuotView ? 9 : 11}" style="color:var(--muted);text-align:center;padding:16px">No ${isQuotView ? 'quotations' : 'invoices'} found</td></tr>`
-        : [...filtered].reverse().map(i => {
-            const isQt = i.type === 'quotation';
-            const st = isQt ? i.status : invStatus(i);
-            const paid = invPaid(i); const bal = invBalance(i);
-            const stClass = st==='Paid'||st==='converted'?'badge-green':st==='Partial'?'badge-amber':st==='Pending'?'badge-blue':'badge-red';
-            const deptNames = (i.dept||[]).map(d => (DEPTS.find(x=>x.id===d)||{name:d}).name).join(', ');
-            return `<tr style="cursor:pointer" onclick="openInvoice('${i.id}')">
-              <td style="color:var(--muted);font-size:10px;font-family:monospace">${i.id}</td>
-              <td><span class="badge ${isQt?'badge-amber':'badge-blue'}">${isQt?'Quotation':'Invoice'}</span></td>
-              <td style="font-weight:500">${i.clientName}</td>
-              <td style="color:var(--muted);font-size:10px">${i.clientPhone || '—'}</td>
-              <td style="font-weight:600">${fmt(i.total)}</td>
-              ${isQuotView ? '' : `<td style="color:var(--green);font-weight:500">${fmt(paid)}</td><td style="color:${bal>0?'#dc2626':'var(--green)'};font-weight:${bal>0?'600':'400'}">${fmt(bal)}</td>`}
-              <td><span class="badge ${stClass}">${st}</span></td>
-              <td style="font-size:10px;color:var(--muted)">${deptNames||'—'}</td>
-              <td style="color:var(--muted);font-size:10px">${i.date}</td>
-              <td onclick="event.stopPropagation()" style="white-space:nowrap">
-                ${!isQt && bal > 0 && hasPerm('inv.record_payment') ? `<button class="btn btn-sm btn-green" onclick="openPaymentModal('${i.id}')" style="margin-right:3px"><i class="ti ti-plus"></i></button>` : ''}
-                ${hasPerm('inv.delete') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="deleteInvoice('${i.id}')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>` : ''}
-              </td>
-            </tr>`;
-          }).join('')}
-      </tbody>
-    </table></div></div>`;
+    ${pills}
+    <div class="card" style="padding:0;overflow:hidden">
+      <div style="overflow-x:auto">
+        <table class="table" style="width:100%;min-width:700px">
+          <thead>${thead}</thead>
+          <tbody>${!rows.length
+            ? `<tr><td colspan="${colspanEmpty}" style="color:var(--muted);text-align:center;padding:24px">
+                <div style="font-size:28px;margin-bottom:6px">${isQtTab?'📋':'🧾'}</div>
+                No ${isQtTab?'quotations':isInvTab?'invoices':'documents'} found${invSearch?' matching "'+invSearch+'"':''}
+              </td></tr>`
+            : rows.map(buildRow).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${rows.length ? `<div style="padding:8px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);display:flex;justify-content:space-between">
+        <span>${rows.length} record${rows.length!==1?'s':''} shown</span>
+        <span>${isInvTab||isMixed?'Total billed: <strong>'+fmt(rows.filter(i=>i.type!=='quotation').reduce((s,i)=>s+i.total,0))+'</strong>':''}</span>
+      </div>` : ''}
+    </div>`;
 }
 function setInvFilter(f) { invFilter = f; renderInvoices(); }
 function setInvTypeFilter(f) { invTypeFilter = f; invFilter = 'all'; renderInvoices(); }
@@ -4754,16 +4937,6 @@ function renderSettings() {
       <div class="card">
         <div class="card-title"><i class="ti ti-file-invoice" style="color:var(--purple)"></i> Invoice Customisation</div>
         <div style="display:grid;gap:10px">
-          <div>
-            <label>Document ID Prefix <span style="font-weight:400;color:var(--muted)">(invoices, receipts &amp; quotations)</span></label>
-            <div style="display:flex;align-items:center;gap:8px">
-              <input id="set-idPrefix" value="${s.idPrefix||''}" placeholder="Leave blank to auto-derive from shop name" style="flex:1" oninput="updateIdPrefixPreview()"/>
-              <div id="id-prefix-preview" style="background:#1e2235;color:#fff;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:700;letter-spacing:1px;white-space:nowrap;min-width:90px;text-align:center">${(s.idPrefix||'').toUpperCase()||deriveInitials(currentShopName||s.bizName)}-301</div>
-            </div>
-          </div>
-          <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px;font-size:11px;color:#166534">
-            <i class="ti ti-sparkles"></i> <strong>Auto-derive:</strong> Leave blank and the system picks the first letter of each word in your shop name automatically — e.g. <em>Mejason Media Production</em> → <strong>MMP</strong>, <em>EDOS CENTRE</em> → <strong>EC</strong>. Or type a custom prefix like <strong>MMP</strong> to lock it in. Always stored in CAPS.
-          </div>
           <div><label>Invoice / Receipt Footer Tagline</label><input id="set-invoiceFootnote" value="${s.invoiceFootnote||'We Deliver Quality.'}" placeholder="e.g. We Deliver Quality."/></div>
           <div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
             <i class="ti ti-info-circle"></i> This tagline appears at the bottom of every invoice and quotation PDF.
@@ -4799,15 +4972,10 @@ async function saveSettings() {
   const fields = ['bizName','bizLocation','bizPhone1','bizPhone2','bizPhone3',
     'mpesaPaybill','mpesaAccount','mpesaTill',
     'bankName','bankAccount','bankHolder','bankBranch','kraPin',
-    'facebook','instagram','email','website','paymentInstructions','invoiceFootnote','invoiceTerms','quotationTerms','idPrefix'];
+    'facebook','instagram','email','website','paymentInstructions','invoiceFootnote','invoiceTerms','quotationTerms'];
   fields.forEach(k => {
     const el = document.getElementById('set-' + k);
-    if (el) {
-      // idPrefix: strip non-alphanumeric and force uppercase
-      SETTINGS[k] = k === 'idPrefix'
-        ? el.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 6)
-        : el.value.trim();
-    }
+    if (el) SETTINGS[k] = el.value.trim();
   });
   SETTINGS.vatRate = 0;
   DEPTS = getDepts();  // Update DEPTS after saving
@@ -4815,16 +4983,6 @@ async function saveSettings() {
   const msg = document.getElementById('settings-saved-msg');
   if (msg) { msg.style.display = 'inline-flex'; setTimeout(() => msg.style.display = 'none', 2500); }
   renderDepartmentsList();  // Refresh departments list
-}
-
-// Live-preview the derived/custom ID prefix as the user types
-function updateIdPrefixPreview() {
-  const input = document.getElementById('set-idPrefix');
-  const preview = document.getElementById('id-prefix-preview');
-  if (!input || !preview) return;
-  const raw = input.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 6);
-  const effective = raw || deriveInitials(currentShopName || SETTINGS.bizName || 'INV');
-  preview.textContent = effective + '-301';
 }
 
 function renderDepartmentsList() {
