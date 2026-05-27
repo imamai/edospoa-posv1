@@ -622,28 +622,54 @@ const dateStr = d => (d || now()).toLocaleDateString('en-KE', {day:'2-digit', mo
 const timeStr = d => (d || now()).toLocaleTimeString('en-KE', {hour:'2-digit', minute:'2-digit'});
 const uid = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 
+// Derive an ID prefix from a name — first letter of each word, uppercase,
+// alphanumeric only, max 4 letters. "Mejason Media Production" → "MMP",
+// "EDOS CENTRE" → "EC", "Acme & Co." → "AC".
+function deriveInitials(name) {
+  const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+  const initials = words
+    .map(w => w.replace(/[^a-zA-Z0-9]/g, '').charAt(0))
+    .filter(Boolean)
+    .join('')
+    .toUpperCase()
+    .slice(0, 4);
+  return initials || 'INV';
+}
+
+// Resolve the active ID prefix: explicit setting wins, else auto-derive
+// from current shop name (or business name as a final fallback).
+function getIdPrefix() {
+  const explicit = (SETTINGS.idPrefix || '').trim();
+  if (explicit) return explicit.toUpperCase().slice(0, 6);
+  return deriveInitials(currentShopName || SETTINGS.bizName || 'INV');
+}
+
 // Generate the next sequential invoice/quotation number based on the highest
 // existing number — so deleted numbers are NEVER reused (prevents ID collisions
 // that cause delete-removes-old-invoice and "data carries over" bugs).
+// Numbers are global across prefixes: if the prefix changes mid-life, the
+// sequence still keeps incrementing instead of clashing with older docs.
 function nextInvoiceNumber() {
-  let maxN = 300; // first invoice is MMP-301
+  let maxN = 300; // first invoice is <PREFIX>-301
   invoices.forEach(i => {
     if (i.type !== 'quotation' && typeof i.id === 'string') {
-      const m = i.id.match(/^MMP-(\d+)$/);
+      // Match trailing digits — accept any prefix shape (legacy MMP-301,
+      // new EC-301, etc.). Quotations already filtered out via i.type.
+      const m = i.id.match(/-(\d+)$/);
       if (m) { const n = parseInt(m[1], 10); if (n > maxN) maxN = n; }
     }
   });
-  return 'MMP-' + String(maxN + 1).padStart(3, '0');
+  return getIdPrefix() + '-' + String(maxN + 1).padStart(3, '0');
 }
 function nextQuotationNumber() {
-  let maxN = 100; // first quotation is QT-101
+  let maxN = 100; // first quotation is <PREFIX>-QT-101
   invoices.forEach(i => {
     if (i.type === 'quotation' && typeof i.id === 'string') {
-      const m = i.id.match(/^QT-(\d+)$/);
+      const m = i.id.match(/-(\d+)$/);
       if (m) { const n = parseInt(m[1], 10); if (n > maxN) maxN = n; }
     }
   });
-  return 'QT-' + String(maxN + 1).padStart(3, '0');
+  return getIdPrefix() + '-QT-' + String(maxN + 1).padStart(3, '0');
 }
 function genReferralCode(name) {
   const prefix = (name || 'CL').replace(/[^a-zA-Z]/g, '').slice(0, 2).toUpperCase().padEnd(2, 'X');
@@ -1447,6 +1473,10 @@ let INVENTORY = (() => {
 const SETTINGS_DEFAULTS = {
   logoDataUrl: '',
   vatRate: 0,
+  // Document ID prefix used for invoices/quotations/receipts. When left
+  // blank the app auto-derives initials from the shop name (Mejason Media
+  // Production → MMP, EDOS CENTRE → EC). Owners can override in Settings.
+  idPrefix: '',
   bizName: 'Mejason Media Production',
   bizLocation: 'Joventure Hotel, 1st Floor, Kibos Rd, Kisumu',
   bizPhone1: '+254 700 864849',
@@ -4724,6 +4754,16 @@ function renderSettings() {
       <div class="card">
         <div class="card-title"><i class="ti ti-file-invoice" style="color:var(--purple)"></i> Invoice Customisation</div>
         <div style="display:grid;gap:10px">
+          <div>
+            <label>Document ID Prefix <span style="font-weight:400;color:var(--muted)">(invoices, receipts &amp; quotations)</span></label>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input id="set-idPrefix" value="${s.idPrefix||''}" placeholder="Leave blank to auto-derive from shop name" style="flex:1" oninput="updateIdPrefixPreview()"/>
+              <div id="id-prefix-preview" style="background:#1e2235;color:#fff;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:700;letter-spacing:1px;white-space:nowrap;min-width:90px;text-align:center">${(s.idPrefix||'').toUpperCase()||deriveInitials(currentShopName||s.bizName)}-301</div>
+            </div>
+          </div>
+          <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px;font-size:11px;color:#166534">
+            <i class="ti ti-sparkles"></i> <strong>Auto-derive:</strong> Leave blank and the system picks the first letter of each word in your shop name automatically — e.g. <em>Mejason Media Production</em> → <strong>MMP</strong>, <em>EDOS CENTRE</em> → <strong>EC</strong>. Or type a custom prefix like <strong>MMP</strong> to lock it in. Always stored in CAPS.
+          </div>
           <div><label>Invoice / Receipt Footer Tagline</label><input id="set-invoiceFootnote" value="${s.invoiceFootnote||'We Deliver Quality.'}" placeholder="e.g. We Deliver Quality."/></div>
           <div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
             <i class="ti ti-info-circle"></i> This tagline appears at the bottom of every invoice and quotation PDF.
@@ -4759,10 +4799,15 @@ async function saveSettings() {
   const fields = ['bizName','bizLocation','bizPhone1','bizPhone2','bizPhone3',
     'mpesaPaybill','mpesaAccount','mpesaTill',
     'bankName','bankAccount','bankHolder','bankBranch','kraPin',
-    'facebook','instagram','email','website','paymentInstructions','invoiceFootnote','invoiceTerms','quotationTerms'];
+    'facebook','instagram','email','website','paymentInstructions','invoiceFootnote','invoiceTerms','quotationTerms','idPrefix'];
   fields.forEach(k => {
     const el = document.getElementById('set-' + k);
-    if (el) SETTINGS[k] = el.value.trim();
+    if (el) {
+      // idPrefix: strip non-alphanumeric and force uppercase
+      SETTINGS[k] = k === 'idPrefix'
+        ? el.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 6)
+        : el.value.trim();
+    }
   });
   SETTINGS.vatRate = 0;
   DEPTS = getDepts();  // Update DEPTS after saving
@@ -4770,6 +4815,16 @@ async function saveSettings() {
   const msg = document.getElementById('settings-saved-msg');
   if (msg) { msg.style.display = 'inline-flex'; setTimeout(() => msg.style.display = 'none', 2500); }
   renderDepartmentsList();  // Refresh departments list
+}
+
+// Live-preview the derived/custom ID prefix as the user types
+function updateIdPrefixPreview() {
+  const input = document.getElementById('set-idPrefix');
+  const preview = document.getElementById('id-prefix-preview');
+  if (!input || !preview) return;
+  const raw = input.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 6);
+  const effective = raw || deriveInitials(currentShopName || SETTINGS.bizName || 'INV');
+  preview.textContent = effective + '-301';
 }
 
 function renderDepartmentsList() {
