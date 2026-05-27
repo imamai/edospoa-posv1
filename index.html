@@ -797,7 +797,7 @@ async function dbDeletePayment(id) {
 }
 async function dbInsertExpense(e) {
   if (!useSupabase) return;
-  await sb.from('expenses').upsert({ id: e.id, shop_id: currentShopId, amount: e.amount, category: e.category, payee: e.payee, method: e.method, note: e.note, date: e.date });
+  await sb.from('expenses').upsert({ id: e.id, shop_id: currentShopId, amount: e.amount, category: e.category, payee: e.payee, method: e.method, note: e.note, date: e.date, dept: e.dept || null });
 }
 async function dbDeleteExpense(id) {
   if (!useSupabase) return;
@@ -1099,7 +1099,7 @@ async function loadFromSupabase() {
     if (cls) clients = cls.map(r => ({ id: r.id, name: r.name, phone: r.phone, email: r.email, event: r.event, birthday: r.birthday || null, notes: r.notes, referral_code: r.referral_code || null, referred_by: r.referred_by || null, createdAt: r.created_at }));
     if (invs) invoices = invs.map(r => r.data);
     if (pays) payments = pays.map(r => ({ id: r.id, invoiceId: r.invoice_id, amount: parseFloat(r.amount), method: r.method, note: r.note, paidAt: r.paid_at }));
-    if (expRes && expRes.data) expenses = expRes.data.map(r => ({ id: r.id, amount: parseFloat(r.amount) || 0, category: r.category || 'Miscellaneous', payee: r.payee || '', method: r.method || 'cash', note: r.note || '', date: r.date || '' }));
+    if (expRes && expRes.data) expenses = expRes.data.map(r => ({ id: r.id, amount: parseFloat(r.amount) || 0, category: r.category || 'Miscellaneous', payee: r.payee || '', method: r.method || 'cash', note: r.note || '', date: r.date || '', dept: r.dept || '' }));
   } catch (e) { console.warn('Supabase load error', e); }
 }
 
@@ -1581,7 +1581,7 @@ let activePeriod = 'all', mpesaPhone = '';
 let periodFrom = '', periodTo = '';
 let svcSearch = '', svcDeptFilter = 'all';
 let analyticsChart = null;
-let expSearch = '', expCatFilter = 'all', expFromFilter = '', expToFilter = '';
+let expSearch = '', expCatFilter = 'all', expFromFilter = '', expToFilter = '', expDeptFilter = 'all';
 
 // Expense categories. "Cost of Goods Sold" is treated as a DIRECT cost
 // (subtracted from revenue to get Gross Profit). All others are operating
@@ -1604,6 +1604,43 @@ const EXPENSE_CATEGORIES = [
   'Miscellaneous',
 ];
 const COGS_CATEGORY = 'Cost of Goods Sold';
+
+// Per-department expense category presets (on top of global categories)
+const DEPT_EXPENSE_CATEGORIES = {
+  'wedding':     ['Venue Hire','Floral & Decor','Bridal Makeup','Second Shooter Fee','Drone Operator Fee','Travel & Accommodation','Printing & Albums','Cost of Goods Sold'],
+  'traditional': ['Traditional Regalia Props','Location Fee','Second Shooter Fee','Cultural Coordinator Fee','Printing & Albums','Travel & Accommodation','Cost of Goods Sold'],
+  'graduation':  ['Venue/Campus Access','Album & Prints','Drone Operator Fee','Second Shooter Fee','Travel & Accommodation','Cost of Goods Sold'],
+  'corporate':   ['Studio Hire','Equipment Rental','Second Shooter Fee','Travel & Accommodation','Post-Production Software','Printing & Marketing','Cost of Goods Sold'],
+  'studio':      ['Studio Supplies','Makeup & Costumes','Background & Props','Equipment Maintenance','Cost of Goods Sold'],
+  'editing':     ['Software Licenses','Storage & Backup','Outsourced Editing','Cost of Goods Sold'],
+  'equipment':   ['Equipment Purchase','Repair & Servicing','Insurance','Transport','Cost of Goods Sold'],
+  'passport':    ['Printing Paper & Ink','Machine Maintenance','Cost of Goods Sold'],
+};
+
+// Get available expense categories for a given dept id (merges dept-specific + global)
+function getExpCatsForDept(deptId) {
+  const specific = DEPT_EXPENSE_CATEGORIES[deptId] || [];
+  const merged = [...new Set([...specific, ...EXPENSE_CATEGORIES])];
+  return merged;
+}
+
+// Get categories available to the current user (based on their allowed depts)
+function getUserExpCats() {
+  const allowed = currentUser?.allowed_depts;
+  if (!allowed || !allowed.length) return EXPENSE_CATEGORIES;
+  const cats = new Set();
+  allowed.forEach(dId => getExpCatsForDept(dId).forEach(c => cats.add(c)));
+  return [...cats];
+}
+
+// Get the departments a user is allowed to record expenses for
+function getUserExpDepts() {
+  if (!currentUser) return [];
+  if (currentUser.role === 'owner' || currentUser.role === 'admin') return DEPTS;
+  const allowed = currentUser.allowed_depts;
+  if (!allowed || !allowed.length) return DEPTS; // manager/staff with no restriction = all
+  return DEPTS.filter(d => allowed.includes(d.id));
+}
 
 function expensesInRange(from, to) {
   if (!from && !to) return expenses;
@@ -3613,9 +3650,14 @@ function renderExpenses() {
     return;
   }
 
-  // Apply filters
-  let list = [...expenses];
-  if (expCatFilter !== 'all') list = list.filter(x => x.category === expCatFilter);
+  const isOwnerAdmin = currentUser && (currentUser.role === 'owner' || currentUser.role === 'admin');
+  const userDepts = getUserExpDepts(); // departments this user can access
+  const allowedDeptIds = new Set(userDepts.map(d => d.id));
+
+  // Apply filters — restrict to user's departments first
+  let list = expenses.filter(e => !e.dept || allowedDeptIds.has(e.dept) || allowedDeptIds.size === DEPTS.length);
+  if (expDeptFilter !== 'all') list = list.filter(x => x.dept === expDeptFilter);
+  if (expCatFilter  !== 'all') list = list.filter(x => x.category === expCatFilter);
   if (expFromFilter) list = list.filter(x => !x.date || x.date >= expFromFilter);
   if (expToFilter)   list = list.filter(x => !x.date || x.date <= expToFilter);
   if (expSearch) {
@@ -3623,7 +3665,8 @@ function renderExpenses() {
     list = list.filter(x =>
       (x.payee || '').toLowerCase().includes(q) ||
       (x.note  || '').toLowerCase().includes(q) ||
-      (x.category || '').toLowerCase().includes(q)
+      (x.category || '').toLowerCase().includes(q) ||
+      (x.dept || '').toLowerCase().includes(q)
     );
   }
   list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
@@ -3633,12 +3676,81 @@ function renderExpenses() {
   list.forEach(e => { catTotals[e.category] = (catTotals[e.category] || 0) + (e.amount || 0); });
   const topCats = Object.entries(catTotals).sort((a, b) => b[1] - a[1]).slice(0, 5);
 
+  // Build category options from user's accessible departments
+  const availableCats = expDeptFilter !== 'all'
+    ? getExpCatsForDept(expDeptFilter)
+    : getUserExpCats();
   const catOptions = ['<option value="all">All Categories</option>']
-    .concat(EXPENSE_CATEGORIES.map(c => `<option value="${c}" ${expCatFilter === c ? 'selected' : ''}>${c}</option>`)).join('');
+    .concat(availableCats.map(c => `<option value="${c}" ${expCatFilter === c ? 'selected' : ''}>${c}</option>`)).join('');
+
+  // Department filter options (only user's allowed depts)
+  const deptFilterOpts = ['<option value="all">All Departments</option>']
+    .concat(userDepts.map(d => `<option value="${d.id}" ${expDeptFilter === d.id ? 'selected' : ''}>${d.name}</option>`)).join('');
+
+  // Per-department P&L summary (owner/admin or if user has multiple depts)
+  const showDeptPL = isOwnerAdmin || userDepts.length > 1;
+  let deptPLHtml = '';
+  if (showDeptPL) {
+    // Revenue per dept from invoices (all time or filtered by date)
+    const deptRevMap = {};
+    const deptExpMap = {};
+    userDepts.forEach(d => { deptRevMap[d.id] = 0; deptExpMap[d.id] = 0; });
+    invoices.filter(i => i.type !== 'quotation').forEach(inv => {
+      inv.items.forEach(item => {
+        if (deptRevMap[item.dept] !== undefined) deptRevMap[item.dept] += item.price * item.qty;
+      });
+    });
+    expenses.forEach(e => {
+      if (e.dept && deptExpMap[e.dept] !== undefined) deptExpMap[e.dept] += (e.amount || 0);
+    });
+    deptPLHtml = `<div class="card" style="margin-bottom:14px">
+      <div class="card-title"><i class="ti ti-building-store" style="color:var(--blue)"></i> Department P&amp;L Overview <span style="font-size:10px;font-weight:400;color:var(--muted)">(all-time revenue vs. expenses per dept)</span></div>
+      <div style="overflow-x:auto"><table class="table" style="width:100%;min-width:620px">
+        <thead><tr>
+          <th>Department</th>
+          <th style="text-align:right">Revenue Billed</th>
+          <th style="text-align:right">Total Expenses</th>
+          <th style="text-align:right">Net P&amp;L</th>
+          <th style="text-align:right">Margin</th>
+        </tr></thead>
+        <tbody>
+          ${userDepts.map(d => {
+            const rev = deptRevMap[d.id] || 0;
+            const exp = deptExpMap[d.id] || 0;
+            const net = rev - exp;
+            const margin = rev ? Math.round(net / rev * 100) : 0;
+            const color = net >= 0 ? 'var(--green)' : '#dc2626';
+            return `<tr>
+              <td><span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:${d.color || 'var(--blue)'};display:inline-block"></span><strong>${d.name}</strong></span></td>
+              <td style="text-align:right">${fmt(rev)}</td>
+              <td style="text-align:right;color:#dc2626">${fmt(exp)}</td>
+              <td style="text-align:right;font-weight:700;color:${color}">${net >= 0 ? '+' : ''}${fmt(net)}</td>
+              <td style="text-align:right"><span style="font-size:11px;padding:2px 8px;border-radius:12px;background:${net >= 0 ? '#dcfce7' : '#fee2e2'};color:${net >= 0 ? '#166534' : '#991b1b'}">${margin}%</span></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+        <tfoot>
+          ${(() => {
+            const totRev = userDepts.reduce((s, d) => s + (deptRevMap[d.id] || 0), 0);
+            const totExp = userDepts.reduce((s, d) => s + (deptExpMap[d.id] || 0), 0);
+            const totNet = totRev - totExp;
+            const totMar = totRev ? Math.round(totNet / totRev * 100) : 0;
+            return `<tr style="background:#fafaf8;font-weight:700">
+              <td>Overall</td>
+              <td style="text-align:right">${fmt(totRev)}</td>
+              <td style="text-align:right;color:#dc2626">${fmt(totExp)}</td>
+              <td style="text-align:right;color:${totNet >= 0 ? 'var(--green)' : '#dc2626'}">${totNet >= 0 ? '+' : ''}${fmt(totNet)}</td>
+              <td style="text-align:right"><span style="font-size:11px;padding:2px 8px;border-radius:12px;background:${totNet >= 0 ? '#dcfce7' : '#fee2e2'};color:${totNet >= 0 ? '#166534' : '#991b1b'}">${totMar}%</span></td>
+            </tr>`;
+          })()}
+        </tfoot>
+      </table></div>
+    </div>`;
+  }
 
   el.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-      <span style="color:var(--muted);font-size:12px">Operating costs &amp; cost-of-goods tracking — ${expenses.length} entries total</span>
+      <span style="color:var(--muted);font-size:12px">Operating costs &amp; cost-of-goods tracking — ${list.length} of ${expenses.length} entries</span>
       ${hasPerm('exp.create') ? `<button class="btn btn-red btn-sm" onclick="openExpenseModal()"><i class="ti ti-plus"></i> Record Expense</button>` : ''}
     </div>
 
@@ -3647,8 +3759,12 @@ function renderExpenses() {
       <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
         <div style="flex:1;min-width:160px">
           <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px">Search</label>
-          <div class="search-bar" style="margin:0"><i class="ti ti-search"></i><input placeholder="Payee, note, category…" value="${expSearch}" oninput="expSearch=this.value;renderExpenses()"/></div>
+          <div class="search-bar" style="margin:0"><i class="ti ti-search"></i><input placeholder="Payee, note, category, dept…" value="${expSearch}" oninput="expSearch=this.value;renderExpenses()"/></div>
         </div>
+        ${userDepts.length > 1 ? `<div>
+          <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px">Department</label>
+          <select onchange="expDeptFilter=this.value;expCatFilter='all';renderExpenses()" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);font-size:12px;min-width:150px">${deptFilterOpts}</select>
+        </div>` : ''}
         <div>
           <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px">Category</label>
           <select onchange="expCatFilter=this.value;renderExpenses()" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);font-size:12px;min-width:170px">${catOptions}</select>
@@ -3661,17 +3777,19 @@ function renderExpenses() {
           <label style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px">To</label>
           <input type="date" value="${expToFilter}" onchange="expToFilter=this.value;renderExpenses()" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);font-size:12px"/>
         </div>
-        <button class="btn btn-outline btn-sm" onclick="expSearch='';expCatFilter='all';expFromFilter='';expToFilter='';renderExpenses()" title="Clear all filters"><i class="ti ti-x"></i> Clear</button>
+        <button class="btn btn-outline btn-sm" onclick="expSearch='';expCatFilter='all';expDeptFilter='all';expFromFilter='';expToFilter='';renderExpenses()" title="Clear all filters"><i class="ti ti-x"></i> Clear</button>
       </div>
     </div>
 
     <!-- KPI strip -->
-    <div class="stats-grid" style="margin-bottom:14px">
+    <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:14px">
       <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Total (Filtered)</div><div class="stat-value">${fmt(total)}</div><div class="stat-sub">${list.length} entr${list.length === 1 ? 'y' : 'ies'}</div></div>
       <div class="stat-card" style="border-top-color:var(--amber)"><div class="stat-label">Top Category</div><div class="stat-value" style="font-size:14px;line-height:1.3">${topCats[0] ? topCats[0][0] : '—'}</div><div class="stat-sub">${topCats[0] ? fmt(topCats[0][1]) : 'No entries'}</div></div>
-      <div class="stat-card" style="border-top-color:var(--blue)"><div class="stat-label">Categories Used</div><div class="stat-value">${Object.keys(catTotals).length}</div><div class="stat-sub">of ${EXPENSE_CATEGORIES.length} total</div></div>
-      <div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">All-Time Total</div><div class="stat-value">${fmt(expenses.reduce((s, e) => s + (e.amount || 0), 0))}</div><div class="stat-sub">All entries</div></div>
+      <div class="stat-card" style="border-top-color:var(--blue)"><div class="stat-label">Categories Used</div><div class="stat-value">${Object.keys(catTotals).length}</div><div class="stat-sub">of ${availableCats.length} available</div></div>
+      <div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">All-Time (My Depts)</div><div class="stat-value">${fmt(expenses.filter(e => !e.dept || allowedDeptIds.has(e.dept)).reduce((s, e) => s + (e.amount || 0), 0))}</div><div class="stat-sub">All entries</div></div>
     </div>
+
+    ${deptPLHtml}
 
     <!-- Top categories -->
     ${topCats.length ? `<div class="card" style="margin-bottom:14px">
@@ -3691,10 +3809,11 @@ function renderExpenses() {
     <!-- Expense table -->
     <div class="card">
       <div style="overflow-x:auto">
-        <table class="table" style="width:100%;min-width:760px">
+        <table class="table" style="width:100%;min-width:800px">
           <thead>
             <tr>
               <th>Date</th>
+              <th>Department</th>
               <th>Category</th>
               <th>Payee</th>
               <th>Method</th>
@@ -3705,19 +3824,23 @@ function renderExpenses() {
           </thead>
           <tbody>
             ${!list.length
-              ? `<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:22px">No expenses match the current filters.</td></tr>`
-              : list.map(e => `<tr>
-                  <td style="color:var(--muted);font-size:11px">${e.date || '—'}</td>
-                  <td><span class="badge ${e.category === COGS_CATEGORY ? 'badge-red' : 'badge-amber'}">${e.category}</span></td>
-                  <td style="font-weight:500">${e.payee || '—'}</td>
-                  <td style="text-transform:capitalize;color:var(--muted);font-size:11px">${e.method || '—'}</td>
-                  <td style="color:var(--muted);font-size:11px;max-width:280px;overflow:hidden;text-overflow:ellipsis">${e.note || ''}</td>
-                  <td style="text-align:right;font-weight:600;color:#dc2626">${fmt(e.amount)}</td>
-                  <td style="white-space:nowrap;text-align:right">
-                    ${hasPerm('exp.edit')   ? `<button class="btn btn-sm btn-outline" onclick="openExpenseModal('${e.id}')" title="Edit"><i class="ti ti-pencil"></i></button>` : ''}
-                    ${hasPerm('exp.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;margin-left:4px" onclick="deleteExpense('${e.id}')" title="Delete"><i class="ti ti-trash"></i></button>` : ''}
-                  </td>
-                </tr>`).join('')}
+              ? `<tr><td colspan="8" style="color:var(--muted);text-align:center;padding:22px">No expenses match the current filters.</td></tr>`
+              : list.map(e => {
+                  const deptObj = DEPTS.find(d => d.id === e.dept);
+                  return `<tr>
+                    <td style="color:var(--muted);font-size:11px">${e.date || '—'}</td>
+                    <td>${deptObj ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px"><span style="width:8px;height:8px;border-radius:50%;background:${deptObj.color||'var(--blue)'};display:inline-block"></span>${deptObj.name}</span>` : '<span style="color:var(--muted);font-size:11px">General</span>'}</td>
+                    <td><span class="badge ${e.category === COGS_CATEGORY ? 'badge-red' : 'badge-amber'}">${e.category}</span></td>
+                    <td style="font-weight:500">${e.payee || '—'}</td>
+                    <td style="text-transform:capitalize;color:var(--muted);font-size:11px">${e.method || '—'}</td>
+                    <td style="color:var(--muted);font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis">${e.note || ''}</td>
+                    <td style="text-align:right;font-weight:600;color:#dc2626">${fmt(e.amount)}</td>
+                    <td style="white-space:nowrap;text-align:right">
+                      ${hasPerm('exp.edit')   ? `<button class="btn btn-sm btn-outline" onclick="openExpenseModal('${e.id}')" title="Edit"><i class="ti ti-pencil"></i></button>` : ''}
+                      ${hasPerm('exp.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;margin-left:4px" onclick="deleteExpense('${e.id}')" title="Delete"><i class="ti ti-trash"></i></button>` : ''}
+                    </td>
+                  </tr>`;
+                }).join('')}
           </tbody>
         </table>
       </div>
@@ -3729,16 +3852,38 @@ function openExpenseModal(editId) {
   if (!editId && !hasPerm('exp.create')) { alert('You do not have permission to add expenses.'); return; }
   const existing = editId ? expenses.find(e => e.id === editId) : null;
   const today = new Date().toISOString().slice(0, 10);
-  const catOpts = EXPENSE_CATEGORIES.map(c => `<option value="${c}" ${existing && existing.category === c ? 'selected' : ''}>${c}</option>`).join('');
+  const userDepts = getUserExpDepts();
+
+  // Pre-select dept: existing > current filter > first allowed dept
+  const defaultDept = existing?.dept || (expDeptFilter !== 'all' ? expDeptFilter : (userDepts[0]?.id || ''));
+
+  // Build dept options
+  const deptOpts = userDepts.map(d =>
+    `<option value="${d.id}" ${defaultDept === d.id ? 'selected' : ''}>${d.name}</option>`
+  ).join('');
+
+  // Build category options for the default dept
+  const catSrc = defaultDept ? getExpCatsForDept(defaultDept) : EXPENSE_CATEGORIES;
+  const catOpts = catSrc.map(c =>
+    `<option value="${c}" ${existing && existing.category === c ? 'selected' : ''}>${c}</option>`
+  ).join('');
+
   document.getElementById('expense-modal-title').textContent = existing ? 'Edit Expense' : 'Record Expense';
   document.getElementById('expense-modal-body').innerHTML = `
     <div style="display:grid;gap:10px">
       <input type="hidden" id="exp-id" value="${existing ? existing.id : ''}"/>
+      <div>
+        <label>Department *</label>
+        <select id="exp-dept" onchange="onExpDeptChange()" style="width:100%">
+          ${userDepts.length > 1 ? `<option value="">— Select Department —</option>` : ''}
+          ${deptOpts}
+        </select>
+      </div>
+      <div><label>Category *</label><select id="exp-category">${catOpts}</select></div>
       <div class="two-col">
         <div><label>Amount (KSh) *</label><input type="number" id="exp-amount" min="0" step="0.01" value="${existing ? existing.amount : ''}" placeholder="0.00"/></div>
         <div><label>Date *</label><input type="date" id="exp-date" value="${existing ? existing.date : today}"/></div>
       </div>
-      <div><label>Category *</label><select id="exp-category">${catOpts}</select></div>
       <div class="two-col">
         <div><label>Payee / Vendor</label><input id="exp-payee" value="${existing ? (existing.payee || '') : ''}" placeholder="e.g. Kenya Power"/></div>
         <div><label>Paid Via</label>
@@ -3749,11 +3894,20 @@ function openExpenseModal(editId) {
       </div>
       <div><label>Note / Reference</label><textarea id="exp-note" placeholder="Invoice ref, description, etc." style="min-height:60px;resize:vertical;padding:8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:12px;width:100%">${existing ? (existing.note || '') : ''}</textarea></div>
       <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 10px;font-size:11px;color:#92400e">
-        <i class="ti ti-info-circle"></i> Tip: tag direct costs (raw materials, stock purchased for resale, etc.) as <strong>Cost of Goods Sold</strong> — these reduce <strong>Gross Profit</strong>. All other categories reduce <strong>Net Profit</strong>.
+        <i class="ti ti-info-circle"></i> Tip: tag direct costs (materials, stock for resale) as <strong>Cost of Goods Sold</strong> — these reduce <strong>Gross Profit</strong>. All other categories reduce <strong>Net Profit</strong>.
       </div>
       <button class="btn btn-red" style="width:100%;justify-content:center" onclick="saveExpense()"><i class="ti ti-check"></i> ${existing ? 'Update' : 'Save'} Expense</button>
     </div>`;
   openModal('expense-modal');
+}
+
+// Called when the dept dropdown changes — reload category options
+function onExpDeptChange() {
+  const deptId = document.getElementById('exp-dept')?.value || '';
+  const catSel = document.getElementById('exp-category');
+  if (!catSel) return;
+  const cats = deptId ? getExpCatsForDept(deptId) : EXPENSE_CATEGORIES;
+  catSel.innerHTML = cats.map(c => `<option value="${c}">${c}</option>`).join('');
 }
 
 async function saveExpense() {
@@ -3761,6 +3915,7 @@ async function saveExpense() {
   const amount = parseFloat(document.getElementById('exp-amount').value) || 0;
   const date   = document.getElementById('exp-date').value;
   const category = document.getElementById('exp-category').value;
+  const dept   = document.getElementById('exp-dept')?.value || '';
   const payee  = document.getElementById('exp-payee').value.trim();
   const method = document.getElementById('exp-method').value;
   const note   = document.getElementById('exp-note').value.trim();
@@ -3768,15 +3923,16 @@ async function saveExpense() {
   if (amount <= 0) { alert('Enter a valid amount.'); return; }
   if (!date)       { alert('Pick a date.'); return; }
   if (!category)   { alert('Pick a category.'); return; }
+  if (!dept)       { alert('Please select a department.'); return; }
 
   if (id) {
     const existing = expenses.find(e => e.id === id);
     if (!existing) { alert('Expense not found.'); return; }
     existing.amount = amount; existing.date = date; existing.category = category;
-    existing.payee = payee; existing.method = method; existing.note = note;
+    existing.dept = dept; existing.payee = payee; existing.method = method; existing.note = note;
     await dbInsertExpense(existing);
   } else {
-    const e = { id: uid(), amount, date, category, payee, method, note };
+    const e = { id: uid(), amount, date, category, dept, payee, method, note };
     expenses.push(e);
     await dbInsertExpense(e);
   }
@@ -3784,6 +3940,7 @@ async function saveExpense() {
   renderExpenses();
   if (document.getElementById('page-dashboard')?.classList.contains('active')) renderDashboard();
 }
+
 
 async function deleteExpense(id) {
   if (!hasPerm('exp.delete')) { alert('You do not have permission to delete expenses.'); return; }
@@ -3965,6 +4122,81 @@ function renderAnalytics() {
         }).join('');
       })()}
     </div>` : ''}
+
+    <!-- Per-Department P&L (period-aware, owner/admin sees all) -->
+    ${(() => {
+      const isOwnerAdmin = currentUser && (currentUser.role === 'owner' || currentUser.role === 'admin');
+      const visibleDepts = isOwnerAdmin ? DEPTS : getUserExpDepts();
+      if (!visibleDepts.length) return '';
+      // Revenue per dept in period (from invoice items)
+      const dRevMap = {}, dExpMap = {}, dCollMap = {};
+      visibleDepts.forEach(d => { dRevMap[d.id] = 0; dExpMap[d.id] = 0; dCollMap[d.id] = 0; });
+      filtered.forEach(inv => {
+        const invPaidAmt = invPaid(inv);
+        const invTot = inv.total || 0;
+        inv.items.forEach(item => {
+          if (dRevMap[item.dept] !== undefined) {
+            const share = invTot ? (item.price * item.qty) / invTot : 0;
+            dRevMap[item.dept] += item.price * item.qty;
+            dCollMap[item.dept] += invPaidAmt * share;
+          }
+        });
+      });
+      expList.forEach(e => {
+        if (e.dept && dExpMap[e.dept] !== undefined) dExpMap[e.dept] += (e.amount || 0);
+      });
+      const totRev = visibleDepts.reduce((s, d) => s + dRevMap[d.id], 0);
+      const totExp = visibleDepts.reduce((s, d) => s + dExpMap[d.id], 0);
+      const totColl = visibleDepts.reduce((s, d) => s + dCollMap[d.id], 0);
+      const totNet = totRev - totExp;
+      const totActNet = totColl - totExp;
+      return `<div class="card" style="margin-bottom:14px">
+        <div class="card-title"><i class="ti ti-building-store" style="color:var(--blue)"></i> Department P&amp;L <span style="font-size:10px;font-weight:400;color:var(--muted)">(period filtered)</span></div>
+        <div style="overflow-x:auto"><table class="table" style="width:100%;min-width:700px">
+          <thead><tr>
+            <th>Department</th>
+            <th style="text-align:right">Billed</th>
+            <th style="text-align:right">Collected</th>
+            <th style="text-align:right">Expenses</th>
+            <th style="text-align:right">Expected Net</th>
+            <th style="text-align:right">Actual Net</th>
+            <th style="text-align:right">Margin</th>
+          </tr></thead>
+          <tbody>
+            ${visibleDepts.map(d => {
+              const rev  = dRevMap[d.id]  || 0;
+              const coll = dCollMap[d.id] || 0;
+              const exp  = dExpMap[d.id]  || 0;
+              const expNet = rev - exp;
+              const actNet = coll - exp;
+              const margin = rev ? Math.round(expNet / rev * 100) : 0;
+              const mc = expNet >= 0 ? 'var(--green)' : '#dc2626';
+              const ac = actNet >= 0 ? 'var(--green)' : '#dc2626';
+              return `<tr>
+                <td><span style="display:inline-flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:50%;background:${d.color||'var(--blue)'};display:inline-block"></span><strong>${d.name}</strong></span></td>
+                <td style="text-align:right">${fmt(rev)}</td>
+                <td style="text-align:right;color:var(--green)">${fmt(coll)}</td>
+                <td style="text-align:right;color:#dc2626">${fmt(exp)}</td>
+                <td style="text-align:right;font-weight:600;color:${mc}">${expNet >= 0 ? '+' : ''}${fmt(expNet)}</td>
+                <td style="text-align:right;font-weight:600;color:${ac}">${actNet >= 0 ? '+' : ''}${fmt(actNet)}</td>
+                <td style="text-align:right"><span style="font-size:11px;padding:2px 8px;border-radius:12px;background:${expNet >= 0 ? '#dcfce7' : '#fee2e2'};color:${expNet >= 0 ? '#166534' : '#991b1b'}">${margin}%</span></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="background:#fafaf8;font-weight:700">
+              <td>Overall</td>
+              <td style="text-align:right">${fmt(totRev)}</td>
+              <td style="text-align:right;color:var(--green)">${fmt(totColl)}</td>
+              <td style="text-align:right;color:#dc2626">${fmt(totExp)}</td>
+              <td style="text-align:right;color:${totNet >= 0 ? 'var(--green)' : '#dc2626'}">${totNet >= 0 ? '+' : ''}${fmt(totNet)}</td>
+              <td style="text-align:right;color:${totActNet >= 0 ? 'var(--green)' : '#dc2626'}">${totActNet >= 0 ? '+' : ''}${fmt(totActNet)}</td>
+              <td style="text-align:right"><span style="font-size:11px;padding:2px 8px;border-radius:12px;background:${totNet >= 0 ? '#dcfce7' : '#fee2e2'};color:${totNet >= 0 ? '#166534' : '#991b1b'}">${totRev ? Math.round(totNet/totRev*100) : 0}%</span></td>
+            </tr>
+          </tfoot>
+        </table></div>
+      </div>`;
+    })()}
 
     <!-- Revenue chart -->
     <div id="rpt-timeline" class="card" style="margin-bottom:14px">
