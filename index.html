@@ -323,15 +323,8 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
       onkeydown="if(event.key==='Enter')document.getElementById('ep-password').focus()"/>
 
     <div class="ep-label" style="margin-top:14px">PASSWORD</div>
-    <div style="position:relative">
-      <input class="ep-input" type="password" id="ep-password" placeholder="Enter your password"
-        onkeydown="if(event.key==='Enter')epLogin()" style="padding-right:44px"/>
-      <button type="button" onclick="(function(){var i=document.getElementById('ep-password'),b=document.getElementById('ep-pw-eye');i.type=i.type==='password'?'text':'password';b.className='ti '+(i.type==='password'?'ti-eye':'ti-eye-off')})()"
-        style="position:absolute;right:0;top:0;bottom:0;width:42px;background:none;border:none;cursor:pointer;color:#5a9a5a;display:flex;align-items:center;justify-content:center;font-size:17px;transition:color .15s"
-        onmouseover="this.style.color='#00A550'" onmouseout="this.style.color='#5a9a5a'">
-        <i id="ep-pw-eye" class="ti ti-eye"></i>
-      </button>
-    </div>
+    <input class="ep-input" type="password" id="ep-password" placeholder="Enter your password"
+      onkeydown="if(event.key==='Enter')epLogin()"/>
 
     <button class="ep-btn" id="ep-login-btn" onclick="epLogin()">Sign In →</button>
     <div class="ep-err" id="ep-err"></div>
@@ -1188,6 +1181,16 @@ const ALL_POS_PERMS = ['dashboard','pos','invoices','clients','inventory','expen
 
 // ── GRANULAR ACTION PERMISSIONS ───────────────────────────
 const ACTION_PERMS = [
+  // ── Dashboard metrics ──────────────────────────────────────────────────
+  { key:'dash.view_billed',      label:'See Total Billed stat card',           group:'Dashboard' },
+  { key:'dash.view_collected',   label:'See Collected stat card',              group:'Dashboard' },
+  { key:'dash.view_partial',     label:'See Partial Balance stat card',        group:'Dashboard' },
+  { key:'dash.view_outstanding', label:'See Outstanding stat card',            group:'Dashboard' },
+  { key:'dash.view_today',       label:'See Today\'s Sales stat card',         group:'Dashboard' },
+  { key:'dash.view_chart',       label:'See Revenue Timeline chart',           group:'Dashboard' },
+  { key:'dash.view_invoices',    label:'See Recent Invoices table',            group:'Dashboard' },
+  { key:'dash.view_deptbars',    label:'See Revenue by Department bars',       group:'Dashboard' },
+  // ── Invoices ────────────────────────────────────────────────────────────
   { key:'inv.create',         label:'Create New Invoices',            group:'Invoices'   },
   { key:'inv.edit',           label:'Edit Invoice Details',           group:'Invoices'   },
   { key:'inv.delete',         label:'Delete Invoices',                group:'Invoices'   },
@@ -1221,8 +1224,11 @@ function defaultPermsForRole(role) {
   if (role === 'manager') {
     return { ...all, 'settings.edit':false, 'settings.logo':false, 'dept.manage':false, 'staff.manage':false, 'inv.delete':false, 'clients.delete':false, 'inventory.delete':false, 'exp.delete':false };
   }
-  // cashier
+  // cashier — dashboard: see today's sales + recent invoices only; no profitability/chart by default
   return {
+    'dash.view_billed':false, 'dash.view_collected':false, 'dash.view_partial':false,
+    'dash.view_outstanding':false, 'dash.view_today':true,
+    'dash.view_chart':false, 'dash.view_invoices':true, 'dash.view_deptbars':false,
     'inv.create':true, 'inv.edit':false, 'inv.delete':false, 'inv.print':true,
     'inv.record_payment':true, 'inv.apply_discount':false,
     'pos.checkout':true, 'pos.edit_price':false, 'pos.apply_discount':false,
@@ -1336,17 +1342,31 @@ async function epLogin() {
     resolveModulePages(mod).forEach(page => modulePerms.add(page));
   });
 
+  // Resolve action perms early so we can decide if dashboard page should be accessible
+  const actionPerms = staffRecord.custom_perms || defaultPermsForRole(role);
+
+  // Does this user have at least one dashboard metric perm explicitly enabled?
+  const hasDashViewPerm = Object.keys(actionPerms).some(
+    k => k.startsWith('dash.view_') && actionPerms[k] === true
+  );
+
   let perms;
   if (isAdminRole) {
     // Admin/Owner: pages from assigned modules PLUS their always-on management pages
     perms = [...new Set([...modulePerms, ...OWNER_ALWAYS])];
   } else if (role === 'cashier') {
-    // Cashier: only these pages — and only if the module is assigned
+    // Cashier: POS + Invoices + Clients from modules
     const CASHIER_ALLOWED = ['pos', 'invoices', 'clients'];
     perms = [...modulePerms].filter(p => CASHIER_ALLOWED.includes(p));
+    // Grant dashboard page access when the dashboard module is subscribed AND
+    // the owner has enabled at least one dash.view_* perm for this cashier
+    if (modulePerms.has('dashboard') && hasDashViewPerm) {
+      perms.push('dashboard');
+    }
     perms.push('modules');
   } else {
     // Manager: exactly what modules unlock + My Modules
+    // Also ensure dashboard is included if they have dash view perms
     perms = [...modulePerms, 'modules'];
   }
 
@@ -1356,8 +1376,6 @@ async function epLogin() {
   // allowed_depts: null/empty = see all; array = restricted to those dept IDs
   const allowedDepts = (staffRecord.allowed_depts && staffRecord.allowed_depts.length)
     ? staffRecord.allowed_depts : null;
-
-  const actionPerms = staffRecord.custom_perms || defaultPermsForRole(role);
 
   currentUser = {
     id: staffRecord.id, username, name: staffRecord.full_name,
@@ -1592,6 +1610,8 @@ let activePeriod = 'all', mpesaPhone = '';
 let periodFrom = '', periodTo = '';
 let svcSearch = '', svcDeptFilter = 'all';
 let analyticsChart = null;
+let dashboardChart = null;
+let dashChartPeriod = 'month'; // default chart period: today|week|month|last7|last30|year
 let expSearch = '', expCatFilter = 'all', expFromFilter = '', expToFilter = '', expDeptFilter = 'all';
 
 // Expense categories. "Cost of Goods Sold" is treated as a DIRECT cost
@@ -1837,100 +1857,388 @@ function filterByPeriod(invList) {
 }
 
 // ── DASHBOARD ────────────────────────────────────────────
+
+// Helper: get invoices scoped to current user's assigned departments.
+// Respects __dashboard_depts perm override: if set, further restricts to those specific depts
+// within the user's already-allowed dept scope.
+function getDashboardDepts() {
+  if (!currentUser) return { depts: DEPTS, restricted: false };
+  if (currentUser.role === 'owner' || currentUser.role === 'admin') return { depts: DEPTS, restricted: false };
+
+  // Base dept scope from allowed_depts
+  const allowed = currentUser.allowedDepts; // array or null
+  let baseDepts = (allowed && allowed.length) ? DEPTS.filter(d => allowed.includes(d.id)) : DEPTS;
+
+  // Further restrict by __dashboard_depts perm override (set in permissions modal)
+  const dashDepts = currentUser.actionPerms?.__dashboard_depts;
+  if (dashDepts && dashDepts.length) {
+    const dashSet = new Set(dashDepts);
+    // Only allow depts that are in both baseDepts AND dashDepts
+    baseDepts = baseDepts.filter(d => dashSet.has(d.id));
+  }
+
+  const restricted = baseDepts.length < DEPTS.length;
+  return { depts: baseDepts, restricted };
+}
+
+// Compute the portion of an invoice that belongs to a set of dept IDs.
+// Returns { billed, collected } based on item-level proportions.
+function invDeptShare(inv, deptIdSet) {
+  const invTot = inv.total || 0;
+  if (!invTot) return { billed: 0, collected: 0 };
+  // billed = sum of items in allowed depts
+  let itemsTotal = 0;
+  let deptItemTotal = 0;
+  inv.items.forEach(item => {
+    const v = (item.price || 0) * (item.qty || 1);
+    itemsTotal += v;
+    if (deptIdSet.has(item.dept)) deptItemTotal += v;
+  });
+  if (!itemsTotal) return { billed: 0, collected: 0 };
+  const ratio = deptItemTotal / itemsTotal;
+  const billed = invTot * ratio;
+  // collected: sum of payments for this invoice * ratio
+  const invPaidTotal = payments.filter(p => p.invoiceId === inv.id).reduce((s, p) => s + (p.amount || 0), 0);
+  const collected = Math.min(invPaidTotal, invTot) * ratio;
+  return { billed, collected };
+}
+
 function renderDashboard() {
-  const invOnly  = invoices.filter(i => i.type !== 'quotation');
-  const qtOnly   = invoices.filter(i => i.type === 'quotation');
-  const total    = invOnly.reduce((a, i) => a + i.total, 0);
-  const unpaid   = invOnly.filter(i => invStatus(i) === 'Unpaid').reduce((a, i) => a + invBalance(i), 0);
-  const partial  = invOnly.filter(i => invStatus(i) === 'Partial').reduce((a, i) => a + invBalance(i), 0);
-  const paid     = invOnly.filter(i => invStatus(i) === 'Paid').reduce((a, i) => a + i.total, 0);
-  const todayStr = new Date().toLocaleDateString('en-KE', {day:'2-digit', month:'short', year:'numeric'});
-  const todayInvs = invOnly.filter(i => i.date === todayStr);
-  const todayRev  = todayInvs.reduce((a, i) => a + i.total, 0);
+  const { depts: userDepts, restricted } = getDashboardDepts();
+  const allowedDeptIds = new Set(userDepts.map(d => d.id));
+
+  // Shorthand for dashboard metric perms (owner always true)
+  const isOwnerAdmin = currentUser?.role === 'owner' || currentUser?.role === 'admin';
+  const dp = key => isOwnerAdmin || hasPerm(key);
+
+  const allInv  = invoices.filter(i => i.type !== 'quotation');
+  const qtOnly  = invoices.filter(i => i.type === 'quotation');
+
+  // Scope invoices: if restricted, only those with at least one item in user's depts
+  const invOnly = restricted
+    ? allInv.filter(inv => inv.items.some(item => allowedDeptIds.has(item.dept)))
+    : allInv;
+
+  // ── KPI metrics ──────────────────────────────────────────
+  const todayStr  = new Date().toLocaleDateString('en-KE', {day:'2-digit', month:'short', year:'numeric'});
+  let total = 0, paid = 0, partial = 0, unpaid = 0, todayRev = 0, todayCount = 0;
+
+  if (!restricted) {
+    total   = invOnly.reduce((a, i) => a + i.total, 0);
+    unpaid  = invOnly.filter(i => invStatus(i) === 'Unpaid').reduce((a, i) => a + invBalance(i), 0);
+    partial = invOnly.filter(i => invStatus(i) === 'Partial').reduce((a, i) => a + invBalance(i), 0);
+    paid    = invOnly.filter(i => invStatus(i) === 'Paid').reduce((a, i) => a + i.total, 0);
+    const todayInvs = invOnly.filter(i => i.date === todayStr);
+    todayRev = todayInvs.reduce((a, i) => a + i.total, 0);
+    todayCount = todayInvs.length;
+  } else {
+    invOnly.forEach(inv => {
+      const { billed, collected: coll } = invDeptShare(inv, allowedDeptIds);
+      total += billed;
+      const bal = billed - coll;
+      const st = invStatus(inv);
+      if (st === 'Paid')    paid    += billed;
+      if (st === 'Partial') partial += bal;
+      if (st === 'Unpaid')  unpaid  += bal;
+      if (inv.date === todayStr) { todayRev += billed; todayCount++; }
+    });
+  }
+
+  // ── Department revenue bars (only user's depts) ──────────
   const deptTotals = {};
-  invOnly.forEach(inv => inv.items.forEach(item => {
-    deptTotals[item.dept] = (deptTotals[item.dept] || 0) + item.price * item.qty;
+  userDepts.forEach(d => { deptTotals[d.id] = 0; });
+  allInv.forEach(inv => inv.items.forEach(item => {
+    if (allowedDeptIds.has(item.dept))
+      deptTotals[item.dept] = (deptTotals[item.dept] || 0) + item.price * item.qty;
   }));
-  const qtPending   = qtOnly.filter(i => i.status === 'Pending');
+
+  // ── Pending quotations ────────────────────────────────────
+  const qtPending    = qtOnly.filter(i => i.status === 'Pending');
   const qtPendingVal = qtPending.reduce((a, i) => a + i.total, 0);
 
-  // ── Profit & expense summary (uses analytics period filter if set) ──
-  const periodInv = filterByPeriod(invOnly);
-  const fin = computeFinancials(periodInv);
-  const isPeriod = !!(periodFrom || periodTo);
-  const periodLabel = isPeriod ? `${periodFrom || 'start'} → ${periodTo || 'now'}` : 'All-time';
-  const expGrossMargin = fin.revenue   ? Math.round(fin.expectedGross / fin.revenue   * 100) : 0;
-  const expNetMargin   = fin.revenue   ? Math.round(fin.expectedNet   / fin.revenue   * 100) : 0;
-  const actGrossMargin = fin.collected ? Math.round(fin.actualGross   / fin.collected * 100) : 0;
-  const actNetMargin   = fin.collected ? Math.round(fin.actualNet     / fin.collected * 100) : 0;
-  const collectionRate = fin.revenue   ? Math.round(fin.collected     / fin.revenue   * 100) : 0;
+  // ── Recent invoices (dept-filtered for restricted users) ────
+  // For restricted users: only include invoices that have items in their allowed depts.
+  // invOnly already filters to those invoices; recentInvs just slices the latest 8.
+  const recentInvs = [...invOnly].reverse().slice(0, 8);
+
+  // ── Dept scope badge ──────────────────────────────────────
+  const deptScopeBadge = restricted
+    ? `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px;padding:8px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:11px;color:#1e40af">
+        <i class="ti ti-building-store" style="font-size:13px"></i>
+        <span style="font-weight:600">Your departments:</span>
+        ${userDepts.map(d => `<span style="display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid ${d.color||'#2563eb'};border-radius:12px;padding:2px 9px;font-size:10px;color:${d.color||'#2563eb'};font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:${d.color||'#2563eb'};display:inline-block"></span>${d.name}</span>`).join('')}
+        <span style="margin-left:auto;color:#64748b;font-size:10px">All metrics filtered to your assigned dept${userDepts.length > 1 ? 's' : ''}</span>
+      </div>` : '';
+
+  // ── Build visible KPI stat cards ─────────────────────────
+  const statCards = [
+    dp('dash.view_billed')      ? `<div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Total Billed</div><div class="stat-value">${fmt(total)}</div><div class="stat-sub">${invOnly.length} invoice${invOnly.length===1?'':'s'}</div></div>` : '',
+    dp('dash.view_collected')   ? `<div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Collected</div><div class="stat-value">${fmt(paid)}</div><div class="stat-sub">Fully paid</div></div>` : '',
+    dp('dash.view_partial')     ? `<div class="stat-card" style="border-top-color:var(--amber)"><div class="stat-label">Partial Balance</div><div class="stat-value">${fmt(partial)}</div><div class="stat-sub">Ongoing credit</div></div>` : '',
+    dp('dash.view_outstanding') ? `<div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Outstanding</div><div class="stat-value">${fmt(unpaid)}</div><div class="stat-sub">No payment yet</div></div>` : '',
+    dp('dash.view_today')       ? `<div class="stat-card" style="border-top-color:var(--blue)"><div class="stat-label">Today's Sales</div><div class="stat-value">${fmt(todayRev)}</div><div class="stat-sub">${todayCount} txn${todayCount===1?'':'s'}</div></div>` : '',
+    // Quotations card always visible (not a financial metric)
+    `<div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">Pending Quotations</div><div class="stat-value">${fmt(qtPendingVal)}</div><div class="stat-sub">${qtPending.length} open · ${qtOnly.length} total</div></div>`,
+  ].filter(Boolean).join('');
+
+  // ── Revenue chart ─────────────────────────────────────────
+  const chartHtml = dp('dash.view_chart') ? `
+    <div class="card" style="margin-bottom:14px;padding:14px 16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        <div class="card-title" style="margin:0">
+          <i class="ti ti-chart-line" style="color:var(--blue)"></i>
+          Revenue Timeline
+          ${restricted ? `<span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:6px">— ${userDepts.map(d=>d.name).join(', ')}</span>` : ''}
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          ${[['today','Today'],['week','This Week'],['month','This Month'],['last30','Last 30 Days'],['year','This Year']].map(([k,lbl])=>
+            `<button class="btn btn-sm ${dashChartPeriod===k?'btn-red':'btn-outline'}" style="font-size:10px;padding:3px 9px" onclick="setDashChartPeriod('${k}')">${lbl}</button>`
+          ).join('')}
+        </div>
+      </div>
+      <div style="position:relative;width:100%;height:200px"><canvas id="dash-revenue-chart"></canvas></div>
+    </div>` : '';
+
+  // ── Bottom two-col ────────────────────────────────────────
+  // Build recent invoice rows outside template literals to avoid nesting issues
+  const _invRow = function(i) {
+    if (restricted) {
+      const share = invDeptShare(i, allowedDeptIds);
+      const deptBilled    = share.billed;
+      const deptCollected = share.collected;
+      const deptBal       = deptBilled - deptCollected;
+      const deptSt = deptBal <= 0 ? 'Paid' : (deptCollected > 0 ? 'Partial' : 'Unpaid');
+      const deptNames = [...new Set(
+        i.items.filter(it => allowedDeptIds.has(it.dept))
+               .map(it => { const d = DEPTS.find(x => x.id === it.dept); return d ? d.name : it.dept; })
+      )].join(', ');
+      const badgeCls = deptSt === 'Paid' ? 'badge-green' : deptSt === 'Partial' ? 'badge-amber' : 'badge-red';
+      const balColor = deptBal > 0 ? '#dc2626' : 'var(--green)';
+      return '<tr onclick="openInvoice(\'' + i.id + '\')" style="cursor:pointer">'
+        + '<td><div style="color:var(--muted);font-size:10px">' + i.id + '</div>'
+        + '<div style="font-size:9px;color:var(--muted);margin-top:1px">' + deptNames + '</div></td>'
+        + '<td style="font-weight:500">' + i.clientName + '</td>'
+        + '<td style="font-weight:600">' + fmt(deptBilled) + '</td>'
+        + '<td style="color:' + balColor + '">' + fmt(Math.max(0, deptBal)) + '</td>'
+        + '<td><span class="badge ' + badgeCls + '">' + deptSt + '</span></td>'
+        + '</tr>';
+    } else {
+      const st  = invStatus(i);
+      const bal = invBalance(i);
+      const badgeCls = st === 'Paid' ? 'badge-green' : st === 'Partial' ? 'badge-amber' : 'badge-red';
+      const balColor = bal > 0 ? '#dc2626' : 'var(--green)';
+      return '<tr onclick="openInvoice(\'' + i.id + '\')" style="cursor:pointer">'
+        + '<td style="color:var(--muted);font-size:10px">' + i.id + '</td>'
+        + '<td style="font-weight:500">' + i.clientName + '</td>'
+        + '<td style="font-weight:600">' + fmt(i.total) + '</td>'
+        + '<td style="color:' + balColor + '">' + fmt(bal) + '</td>'
+        + '<td><span class="badge ' + badgeCls + '">' + st + '</span></td>'
+        + '</tr>';
+    }
+  }
+  const invoiceRows = !recentInvs.length
+    ? '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:16px">No invoices yet</td></tr>'
+    : recentInvs.map(_invRow).join('');
+
+  const deptLabel = restricted ? ' <span style="font-size:10px;font-weight:400;color:var(--muted)">(your dept' + (userDepts.length > 1 ? 's' : '') + ')</span>' : '';
+  const amtHeader = restricted ? 'Dept Items Billed' : 'Amount';
+  const balHeader = restricted ? 'Dept Balance' : 'Balance';
+
+  const showInvoices  = dp('dash.view_invoices');
+  const showDeptBars  = dp('dash.view_deptbars');
+  const bottomHtml = (showInvoices || showDeptBars) ? (
+    '<div class="' + (showInvoices && showDeptBars ? 'two-col' : '') + '" style="margin-bottom:14px">'
+    + (showInvoices
+        ? '<div class="card">'
+        + '<div class="card-title"><i class="ti ti-receipt" style="color:var(--red)"></i> Recent Invoices' + deptLabel + '</div>'
+        + '<table class="table"><thead><tr><th>Invoice</th><th>Client</th><th>' + amtHeader + '</th><th>' + balHeader + '</th><th>Status</th></tr></thead>'
+        + '<tbody>' + invoiceRows + '</tbody></table>'
+        + '</div>'
+        : '')
+    + (showDeptBars
+        ? '<div class="card">'
+        + '<div class="card-title"><i class="ti ti-chart-pie" style="color:var(--red)"></i> Revenue by Department'
+        + (restricted ? ' <span style="font-size:10px;font-weight:400;color:var(--muted)">(assigned)</span>' : '')
+        + '</div>'
+        + renderDeptBars(deptTotals)
+        + '</div>'
+        : '')
+    + '</div>'
+  ) : '';
 
   document.getElementById('page-dashboard').innerHTML = `
-    <div class="stats-grid">
-      <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Total Billed</div><div class="stat-value">${fmt(total)}</div><div class="stat-sub">${invOnly.length} invoices</div></div>
-      <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Collected</div><div class="stat-value">${fmt(paid)}</div><div class="stat-sub">Fully paid</div></div>
-      <div class="stat-card" style="border-top-color:var(--amber)"><div class="stat-label">Partial Balance</div><div class="stat-value">${fmt(partial)}</div><div class="stat-sub">Ongoing credit</div></div>
-      <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Outstanding</div><div class="stat-value">${fmt(unpaid)}</div><div class="stat-sub">No payment yet</div></div>
-      <div class="stat-card" style="border-top-color:var(--blue)"><div class="stat-label">Today's Sales</div><div class="stat-value">${fmt(todayRev)}</div><div class="stat-sub">${todayInvs.length} txns</div></div>
-      <div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">Pending Quotations</div><div class="stat-value">${fmt(qtPendingVal)}</div><div class="stat-sub">${qtPending.length} open · ${qtOnly.length} total</div></div>
-    </div>
+    ${deptScopeBadge}
+    <div class="stats-grid">${statCards}</div>
+    ${chartHtml}
+    ${bottomHtml}`;
 
-    <!-- Profitability strip -->
-    <div class="card" style="margin-top:14px;margin-bottom:14px;padding:14px 16px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
-        <div class="card-title" style="margin:0"><i class="ti ti-trending-up" style="color:var(--green)"></i> Profitability <span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:6px">${periodLabel}</span></div>
-        ${hasPerm('exp.view') ? `<button class="btn btn-sm btn-outline" onclick="nav('expenses',1)" title="Open expenses"><i class="ti ti-cash-banknote-off"></i> Manage Expenses</button>` : ''}
-      </div>
+  // Draw chart if visible
+  if (dp('dash.view_chart')) {
+    _renderDashboardLineChart(invOnly, allowedDeptIds, restricted, userDepts);
+  }
+}
 
-      <!-- Cost row -->
-      <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
-        <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Billed (Revenue)</div><div class="stat-value">${fmt(fin.revenue)}</div><div class="stat-sub">${periodInv.length} invoice${periodInv.length === 1 ? '' : 's'}</div></div>
-        <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Collected (Cash)</div><div class="stat-value">${fmt(fin.collected)}</div><div class="stat-sub">${collectionRate}% of billed</div></div>
-        <div class="stat-card" style="border-top-color:#f59e0b"><div class="stat-label">Cost of Goods</div><div class="stat-value">${fmt(fin.cogs)}</div><div class="stat-sub">Direct costs</div></div>
-        <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Operating Expenses</div><div class="stat-value">${fmt(fin.opex)}</div><div class="stat-sub">${fin.expCount} expense${fin.expCount === 1 ? '' : 's'}</div></div>
-      </div>
+// Dept-scoped financials: like computeFinancials but uses dept share for revenue/collected.
+function computeFinancialsDeptScoped(periodInvList, deptIdSet) {
+  let revenue = 0, collected = 0;
+  periodInvList.forEach(inv => {
+    const share = invDeptShare(inv, deptIdSet);
+    revenue   += share.billed;
+    collected += share.collected;
+  });
+  const expList = expensesInRange(periodFrom, periodTo);
+  const cogs = expList.filter(e => e.category === COGS_CATEGORY).reduce((s, e) => s + (e.amount || 0), 0);
+  const opex = expList.filter(e => e.category !== COGS_CATEGORY).reduce((s, e) => s + (e.amount || 0), 0);
+  const totalExpenses = cogs + opex;
+  const expectedGross = revenue   - cogs;
+  const expectedNet   = expectedGross - opex;
+  const actualGross   = collected - cogs;
+  const actualNet     = actualGross - opex;
+  return { revenue, collected, cogs, opex, totalExpenses, expectedGross, expectedNet, actualGross, actualNet,
+    gross: expectedGross, net: expectedNet, expCount: expList.length };
+}
 
-      <!-- Expected (billed) vs Actual (collected) -->
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px">
-        <div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:#fafaf8">
-          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px"><i class="ti ti-file-invoice"></i> Expected (Billed Basis)</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <div class="stat-card" style="border-top-color:#0ea5e9"><div class="stat-label">Expected Gross Profit</div><div class="stat-value" style="color:${fin.expectedGross >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.expectedGross)}</div><div class="stat-sub">${expGrossMargin}% margin</div></div>
-            <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Expected Net Profit</div><div class="stat-value" style="color:${fin.expectedNet >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.expectedNet)}</div><div class="stat-sub">${expNetMargin}% margin</div></div>
-          </div>
-        </div>
-        <div style="border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;background:#f0fdf4">
-          <div style="font-size:10px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px"><i class="ti ti-cash"></i> Actual (Cash Basis)</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <div class="stat-card" style="border-top-color:#0ea5e9"><div class="stat-label">Actual Gross Profit</div><div class="stat-value" style="color:${fin.actualGross >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.actualGross)}</div><div class="stat-sub">${actGrossMargin}% margin</div></div>
-            <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Actual Net Profit</div><div class="stat-value" style="color:${fin.actualNet >= 0 ? 'var(--green)' : '#dc2626'}">${fmt(fin.actualNet)}</div><div class="stat-sub">${actNetMargin}% margin</div></div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="two-col" style="margin-bottom:14px">
-      <div class="card">
-        <div class="card-title"><i class="ti ti-receipt" style="color:var(--red)"></i> Recent Invoices</div>
-        <table class="table"><thead><tr><th>Invoice</th><th>Client</th><th>Amount</th><th>Balance</th><th>Status</th></tr></thead>
-        <tbody>${!invOnly.length
-          ? '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:16px">No invoices yet</td></tr>'
-          : [...invOnly].reverse().slice(0, 8).map(i => {
-              const st = invStatus(i); const bal = invBalance(i);
-              return `<tr onclick="openInvoice('${i.id}')" style="cursor:pointer">
-                <td style="color:var(--muted);font-size:10px">${i.id}</td>
-                <td style="font-weight:500">${i.clientName}</td>
-                <td style="font-weight:600">${fmt(i.total)}</td>
-                <td style="color:${bal > 0 ? '#dc2626' : 'var(--green)'}">${fmt(bal)}</td>
-                <td><span class="badge ${st==='Paid'?'badge-green':st==='Partial'?'badge-amber':'badge-red'}">${st}</span></td>
-              </tr>`;
-            }).join('')}
-        </tbody></table>
-      </div>
-      <div class="card">
-        <div class="card-title"><i class="ti ti-chart-pie" style="color:var(--red)"></i> Revenue by Department</div>
-        ${renderDeptBars(deptTotals)}
-      </div>
-    </div>`;
+function setDashChartPeriod(p) {
+  dashChartPeriod = p;
+  renderDashboard();
+}
+
+function _renderDashboardLineChart(invOnly, allowedDeptIds, restricted, userDepts) {
+  setTimeout(() => {
+    const ctx = document.getElementById('dash-revenue-chart'); if (!ctx) return;
+    if (dashboardChart) { dashboardChart.destroy(); dashboardChart = null; }
+
+    const iso = d => d.toISOString().slice(0, 10);
+    const today = new Date(); today.setHours(0,0,0,0);
+    let labels = [], buckets = {};
+
+    if (dashChartPeriod === 'today') {
+      // Hourly buckets 0–23
+      for (let h = 0; h < 24; h++) labels.push(`${String(h).padStart(2,'0')}:00`);
+      labels.forEach(l => { buckets[l] = 0; });
+      const todayStr = new Date().toLocaleDateString('en-KE', {day:'2-digit', month:'short', year:'numeric'});
+      invOnly.filter(i => i.date === todayStr).forEach(inv => {
+        const h = inv.createdAt ? new Date(inv.createdAt).getHours() : (inv.time ? parseInt(inv.time) : 0);
+        const key = `${String(h).padStart(2,'0')}:00`;
+        const val = restricted ? invDeptShare(inv, allowedDeptIds).billed : inv.total;
+        if (buckets[key] !== undefined) buckets[key] += val;
+      });
+    } else if (dashChartPeriod === 'week') {
+      const day = (today.getDay() + 6) % 7;
+      for (let i = 0; i <= day; i++) {
+        const d = new Date(today); d.setDate(today.getDate() - day + i);
+        labels.push(iso(d));
+      }
+      labels.forEach(l => { buckets[l] = 0; });
+      invOnly.forEach(inv => {
+        const d = parseInvDate(inv.date); if (!d) return;
+        const k = iso(d);
+        if (buckets[k] !== undefined) buckets[k] += restricted ? invDeptShare(inv, allowedDeptIds).billed : inv.total;
+      });
+    } else if (dashChartPeriod === 'month') {
+      const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+      for (let d = 1; d <= today.getDate(); d++) {
+        const dt = new Date(today.getFullYear(), today.getMonth(), d);
+        labels.push(iso(dt));
+      }
+      labels.forEach(l => { buckets[l] = 0; });
+      invOnly.forEach(inv => {
+        const d = parseInvDate(inv.date); if (!d) return;
+        const k = iso(d);
+        if (buckets[k] !== undefined) buckets[k] += restricted ? invDeptShare(inv, allowedDeptIds).billed : inv.total;
+      });
+    } else if (dashChartPeriod === 'last30') {
+      for (let i = 29; i >= 0; i--) {
+        const d = new Date(today); d.setDate(today.getDate() - i);
+        labels.push(iso(d));
+      }
+      labels.forEach(l => { buckets[l] = 0; });
+      invOnly.forEach(inv => {
+        const d = parseInvDate(inv.date); if (!d) return;
+        const k = iso(d);
+        if (buckets[k] !== undefined) buckets[k] += restricted ? invDeptShare(inv, allowedDeptIds).billed : inv.total;
+      });
+    } else { // year — monthly buckets
+      for (let m = 0; m <= today.getMonth(); m++) {
+        const dt = new Date(today.getFullYear(), m, 1);
+        labels.push(iso(dt).slice(0, 7)); // YYYY-MM
+      }
+      labels.forEach(l => { buckets[l] = 0; });
+      invOnly.forEach(inv => {
+        const d = parseInvDate(inv.date); if (!d) return;
+        const k = iso(d).slice(0, 7);
+        if (buckets[k] !== undefined) buckets[k] += restricted ? invDeptShare(inv, allowedDeptIds).billed : inv.total;
+      });
+    }
+
+    const data = labels.map(l => buckets[l] || 0);
+    const displayLabels = labels.map(l => {
+      if (dashChartPeriod === 'today') return l;
+      if (dashChartPeriod === 'year') {
+        const [y, m] = l.split('-');
+        return new Date(+y, +m - 1, 1).toLocaleDateString('en-KE', {month:'short'});
+      }
+      const d = new Date(l + 'T00:00:00');
+      return d.toLocaleDateString('en-KE', {day:'numeric', month:'short'});
+    });
+
+    // If user has multiple depts, build a multi-line dataset per dept
+    const datasets = [];
+    if (restricted && userDepts.length > 1) {
+      const deptColors = userDepts.map(d => d.color || '#2563eb');
+      userDepts.forEach((dept, idx) => {
+        const deptSet = new Set([dept.id]);
+        const deptBuckets = {};
+        labels.forEach(l => { deptBuckets[l] = 0; });
+        invOnly.forEach(inv => {
+          const d = parseInvDate(inv.date); if (!d) return;
+          let k;
+          if (dashChartPeriod === 'today') {
+            const h = inv.createdAt ? new Date(inv.createdAt).getHours() : 0;
+            k = `${String(h).padStart(2,'0')}:00`;
+          } else if (dashChartPeriod === 'year') {
+            k = (() => { const i2 = iso(d); return i2.slice(0,7); })();
+          } else {
+            k = iso(d);
+          }
+          if (deptBuckets[k] !== undefined) deptBuckets[k] += invDeptShare(inv, deptSet).billed;
+        });
+        datasets.push({
+          label: dept.name,
+          data: labels.map(l => deptBuckets[l] || 0),
+          borderColor: deptColors[idx],
+          backgroundColor: deptColors[idx] + '20',
+          borderWidth: 2, fill: true, tension: 0.35, pointRadius: 3
+        });
+      });
+    } else {
+      // Single line (total or single dept)
+      const color = (restricted && userDepts[0]) ? (userDepts[0].color || '#2563eb') : '#C8252A';
+      datasets.push({
+        label: restricted ? userDepts.map(d => d.name).join(' + ') : 'Total Revenue',
+        data,
+        borderColor: color,
+        backgroundColor: color + '18',
+        borderWidth: 2, fill: true, tension: 0.35, pointRadius: 3
+      });
+    }
+
+    dashboardChart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: displayLabels, datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: datasets.length > 1, position: 'top', labels: { font: { size: 10 }, boxWidth: 10 } },
+          tooltip: { callbacks: { label: ctx2 => `KSh ${Math.round(ctx2.raw).toLocaleString()}` } }
+        },
+        scales: {
+          x: { ticks: { font: { size: 10 }, autoSkip: true, maxTicksLimit: 14 } },
+          y: { ticks: { font: { size: 10 }, callback: v => 'KSh ' + Math.round(v).toLocaleString() }, beginAtZero: true }
+        }
+      }
+    });
+  }, 60);
 }
 
 function renderDeptBars(deptTotals) {
@@ -3207,30 +3515,42 @@ async function sendInvoiceViaEmail(invId, email, clientName) {
 
 // ── INVOICES PAGE ────────────────────────────────────────
 function renderInvoices() {
-  // ── Department-based access control ──────────────────────
-  const allowedDepts = currentUser?.allowedDepts || null;
+  // ── Dept scoping (use allowed_depts directly — NOT dashboard override) ──
+  const _isOwnerAdmin = currentUser && (currentUser.role === 'owner' || currentUser.role === 'admin');
+  const _raw = currentUser ? currentUser.allowedDepts : null;
+  const invRestricted  = !_isOwnerAdmin && Array.isArray(_raw) && _raw.length > 0;
+  const allowedInvSet  = invRestricted ? new Set(_raw) : null;
+  const userInvDepts   = invRestricted ? DEPTS.filter(d => _raw.includes(d.id)) : DEPTS;
+
+  // Column label variants
+  const totalHeader = invRestricted ? 'Dept Billed' : 'Total';
+  const paidHeader  = invRestricted ? 'Dept Paid'   : 'Paid';
+  const balHeader2  = invRestricted ? 'Dept Balance' : 'Balance';
+
+  // ── Filter invoices to user's departments ──────────────
   const allDocs = invoices.filter(i => {
-    if (!allowedDepts) return true;
-    return i.dept && i.dept.some(d => allowedDepts.includes(d));
+    if (!invRestricted) return true;
+    if (Array.isArray(i.items) && i.items.length)
+      return i.items.some(it => it.dept && allowedInvSet.has(it.dept));
+    if (Array.isArray(i.dept) && i.dept.length)
+      return i.dept.some(d => allowedInvSet.has(d));
+    return true; // no dept info — show it
   });
 
-  // ── Tab counts (always over full set, unaffected by filters) ──
-  const countAll  = allDocs.length;
-  const countInv  = allDocs.filter(i => i.type !== 'quotation').length;
-  const countQt   = allDocs.filter(i => i.type === 'quotation').length;
+  const countAll = allDocs.length;
+  const countInv = allDocs.filter(i => i.type !== 'quotation').length;
+  const countQt  = allDocs.filter(i => i.type === 'quotation').length;
 
-  // ── Type filter ───────────────────────────────────────────
   let filtered = [...allDocs];
   if (invTypeFilter === 'invoices')    filtered = filtered.filter(i => i.type !== 'quotation');
   else if (invTypeFilter === 'quotations') filtered = filtered.filter(i => i.type === 'quotation');
 
-  // ── Status sub-filter ─────────────────────────────────────
   const isQtTab  = invTypeFilter === 'quotations';
   const isInvTab = invTypeFilter === 'invoices';
   const isMixed  = invTypeFilter === 'all';
 
   if (isQtTab) {
-    if (invFilter === 'pending')   filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'pending');
+    if (invFilter === 'pending')    filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'pending');
     else if (invFilter === 'converted') filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'converted');
     else if (invFilter === 'expired')   filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'expired');
   } else {
@@ -3239,7 +3559,6 @@ function renderInvoices() {
     else if (invFilter === 'unpaid')  filtered = filtered.filter(i => i.type !== 'quotation' && invStatus(i) === 'Unpaid');
   }
 
-  // ── Search ────────────────────────────────────────────────
   if (invSearch) filtered = filtered.filter(i =>
     i.clientName.toLowerCase().includes(invSearch.toLowerCase()) ||
     i.id.toLowerCase().includes(invSearch.toLowerCase()) ||
@@ -3247,66 +3566,26 @@ function renderInvoices() {
   );
 
   const rows = [...filtered].reverse();
-
-  // ── Column definitions per tab ────────────────────────────
-  // Invoices: Number | Client | Phone | Total | Paid | Balance | Status | Dept | Date | Actions
-  // Quotations: Number | Client | Phone | Total | Valid Until | Status | Dept | Date | Actions
-  // All: Number | Type | Client | Phone | Total | Paid/Balance* | Status | Dept | Date | Actions
-  //      (* paid/balance only for invoice rows; quotation rows show —)
-
   const colspanEmpty = isQtTab ? 9 : (isMixed ? 11 : 10);
 
   // ── Status pills ──────────────────────────────────────────
   let pills = '';
   if (isQtTab) {
-    const pDefs = [
-      {k:'all',    label:'All',       cls:'sp-all'},
-      {k:'pending', label:'Pending',  cls:'sp-pending'},
-      {k:'converted',label:'Converted',cls:'sp-converted'},
-      {k:'expired', label:'Expired',  cls:'sp-expired'},
-    ];
-    pills = `<div class="status-pills">
-      <span style="font-size:11px;color:var(--muted);margin-right:2px">Filter:</span>
-      ${pDefs.map(p=>`<span class="status-pill ${p.cls}${invFilter===p.k?' active':''}" onclick="setInvFilter('${p.k}')">${p.label}</span>`).join('')}
-    </div>`;
+    const pDefs = [{k:'all',label:'All',cls:'sp-all'},{k:'pending',label:'Pending',cls:'sp-pending'},{k:'converted',label:'Converted',cls:'sp-converted'},{k:'expired',label:'Expired',cls:'sp-expired'}];
+    pills = '<div class="status-pills"><span style="font-size:11px;color:var(--muted);margin-right:2px">Filter:</span>' + pDefs.map(p=>'<span class="status-pill '+p.cls+(invFilter===p.k?' active':'')+'" onclick="setInvFilter(\''+p.k+'\')">'+p.label+'</span>').join('') + '</div>';
   } else {
-    const pDefs = [
-      {k:'all',     label:'All',      cls:'sp-all'},
-      {k:'paid',    label:'Paid',     cls:'sp-paid'},
-      {k:'partial', label:'Partial',  cls:'sp-partial'},
-      {k:'unpaid',  label:'Unpaid',   cls:'sp-unpaid'},
-    ];
-    pills = `<div class="status-pills">
-      <span style="font-size:11px;color:var(--muted);margin-right:2px">Filter:</span>
-      ${pDefs.map(p=>`<span class="status-pill ${p.cls}${invFilter===p.k?' active':''}" onclick="setInvFilter('${p.k}')">${p.label}</span>`).join('')}
-    </div>`;
+    const pDefs = [{k:'all',label:'All',cls:'sp-all'},{k:'paid',label:'Paid',cls:'sp-paid'},{k:'partial',label:'Partial',cls:'sp-partial'},{k:'unpaid',label:'Unpaid',cls:'sp-unpaid'}];
+    pills = '<div class="status-pills"><span style="font-size:11px;color:var(--muted);margin-right:2px">Filter:</span>' + pDefs.map(p=>'<span class="status-pill '+p.cls+(invFilter===p.k?' active':'')+'" onclick="setInvFilter(\''+p.k+'\')">'+p.label+'</span>').join('') + '</div>';
   }
 
   // ── Table header ──────────────────────────────────────────
   let thead = '';
   if (isInvTab) {
-    thead = `<tr>
-      <th>Number</th><th>Client</th><th>Phone</th>
-      <th style="text-align:right">Total</th>
-      <th style="text-align:right">Paid</th>
-      <th style="text-align:right">Balance</th>
-      <th>Status</th><th>Dept</th><th>Date</th><th></th>
-    </tr>`;
+    thead = '<tr><th>Number</th><th>Client</th><th>Phone</th><th style="text-align:right">'+totalHeader+'</th><th style="text-align:right">'+paidHeader+'</th><th style="text-align:right">'+balHeader2+'</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
   } else if (isQtTab) {
-    thead = `<tr>
-      <th>Number</th><th>Client</th><th>Phone</th>
-      <th style="text-align:right">Amount</th>
-      <th>Valid Until</th>
-      <th>Status</th><th>Dept</th><th>Date</th><th></th>
-    </tr>`;
+    thead = '<tr><th>Number</th><th>Client</th><th>Phone</th><th style="text-align:right">Amount</th><th>Valid Until</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
   } else {
-    thead = `<tr>
-      <th>Number</th><th>Type</th><th>Client</th><th>Phone</th>
-      <th style="text-align:right">Total</th>
-      <th style="text-align:right">Paid</th>
-      <th style="text-align:right">Balance</th>
-      <th>Status</th><th>Dept</th><th>Date</th><th></th>
-    </tr>`;
+    thead = '<tr><th>Number</th><th>Type</th><th>Client</th><th>Phone</th><th style="text-align:right">'+totalHeader+'</th><th style="text-align:right">'+paidHeader+'</th><th style="text-align:right">'+balHeader2+'</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
   }
 
   // ── Row builder ───────────────────────────────────────────
@@ -3315,123 +3594,132 @@ function renderInvoices() {
     const st   = isQt ? (i.status || 'Pending') : invStatus(i);
     const paid = isQt ? 0 : invPaid(i);
     const bal  = isQt ? i.total : invBalance(i);
-    const deptNames = (i.dept||[]).map(d => (DEPTS.find(x=>x.id===d)||{name:d}).name).join(', ');
 
-    // Status badge colour
-    const stLower = st.toLowerCase();
-    const stClass = stLower==='paid'?'badge-green'
-      : stLower==='partial'?'badge-amber'
-      : stLower==='converted'?'badge-green'
-      : stLower==='pending'?'badge-blue'
-      : stLower==='expired'?'badge-gray'
-      : 'badge-red'; // Unpaid
+    // Dept-proportional amounts for restricted users
+    var dispTotal, dispPaid, dispBal, dispSt;
+    if (invRestricted && !isQt) {
+      var share = invDeptShare(i, allowedInvSet);
+      dispTotal = share.billed;
+      dispPaid  = share.collected;
+      dispBal   = Math.max(0, dispTotal - dispPaid);
+      dispSt    = dispBal <= 0 ? 'Paid' : (dispPaid > 0 ? 'Partial' : 'Unpaid');
+    } else {
+      dispTotal = i.total;
+      dispPaid  = paid;
+      dispBal   = bal;
+      dispSt    = st;
+    }
 
-    // Valid until (30 days from quotation date)
-    const validUntil = (() => {
-      if (!isQt) return '';
-      try {
-        const d = new Date(i.date); d.setDate(d.getDate() + 30);
-        return d.toLocaleDateString('en-KE', {day:'2-digit',month:'short',year:'numeric'});
-      } catch { return '—'; }
-    })();
+    // Dept names visible to this user
+    var allDeptNames = (i.dept||[]).map(function(d){var x=DEPTS.find(function(x){return x.id===d;});return x?x.name:d;}).join(', ');
+    var deptNames = allDeptNames;
+    if (invRestricted && Array.isArray(i.items)) {
+      var dn = [];
+      i.items.forEach(function(it){if(allowedInvSet.has(it.dept)){var x=DEPTS.find(function(x){return x.id===it.dept;});var nm=x?x.name:it.dept;if(dn.indexOf(nm)<0)dn.push(nm);}});
+      if (dn.length) deptNames = dn.join(', ');
+    }
 
-    // Quotation link badge — shows if quotation has linked invoice or vice-versa
-    const linkBadge = isQt && i.invoiceRef
-      ? `<span title="Converted → ${i.invoiceRef}" style="font-size:9px;background:#dcfce7;color:#166534;border-radius:4px;padding:1px 5px;margin-left:4px;cursor:default">→ ${i.invoiceRef}</span>`
-      : (!isQt && i.quotationRef
-        ? `<span title="From ${i.quotationRef}" style="font-size:9px;background:#ede9fe;color:#6d28d9;border-radius:4px;padding:1px 5px;margin-left:4px;cursor:default">QT ${i.quotationRef.match(/-(\d+)$/)?.[1]||''}</span>`
-        : '');
+    var stLow = dispSt.toLowerCase();
+    var stClass = stLow==='paid'?'badge-green':stLow==='partial'?'badge-amber':stLow==='converted'?'badge-green':stLow==='pending'?'badge-blue':stLow==='expired'?'badge-gray':'badge-red';
+
+    var validUntil = '';
+    if (isQt) { try { var vd=new Date(i.date); vd.setDate(vd.getDate()+30); validUntil=vd.toLocaleDateString('en-KE',{day:'2-digit',month:'short',year:'numeric'}); } catch(e){ validUntil='—'; } }
+
+    var linkBadge = '';
+    if (isQt && i.invoiceRef) linkBadge = '<span title="Converted → '+i.invoiceRef+'" style="font-size:9px;background:#dcfce7;color:#166534;border-radius:4px;padding:1px 5px;margin-left:4px;cursor:default">→ '+i.invoiceRef+'</span>';
+    else if (!isQt && i.quotationRef) { var qn=(i.quotationRef.match(/-(\d+)$/)||[])[1]||''; linkBadge='<span title="From '+i.quotationRef+'" style="font-size:9px;background:#ede9fe;color:#6d28d9;border-radius:4px;padding:1px 5px;margin-left:4px;cursor:default">QT '+qn+'</span>'; }
+
+    var actBtns = '';
+    if (isInvTab || isMixed) {
+      if (!isQt && dispBal>0 && hasPerm('inv.record_payment')) actBtns += '<button class="btn btn-sm btn-green" onclick="openPaymentModal(\''+i.id+'\')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>';
+      if (isQt && (i.status||'').toLowerCase()==='pending' && hasPerm('inv.create')) actBtns += '<button class="btn btn-sm btn-green" style="margin-right:3px;font-size:10px" onclick="event.stopPropagation();convertQuotationToInvoice(\''+i.id+'\')" title="Convert to Invoice"><i class="ti ti-file-invoice"></i></button>';
+      if (hasPerm('inv.delete')) actBtns += '<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="'+(isMixed?'event.stopPropagation();':'')+'deleteInvoice(\''+i.id+'\')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>';
+    } else {
+      if (dispBal>0 && hasPerm('inv.record_payment')) actBtns += '<button class="btn btn-sm btn-green" onclick="openPaymentModal(\''+i.id+'\')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>';
+      if (hasPerm('inv.delete')) actBtns += '<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="deleteInvoice(\''+i.id+'\')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>';
+    }
 
     if (isInvTab) {
-      return `<tr style="cursor:pointer" onclick="openInvoice('${i.id}')">
-        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${i.id}${linkBadge}</td>
-        <td style="font-weight:500">${i.clientName}</td>
-        <td style="color:var(--muted);font-size:11px">${i.clientPhone||'—'}</td>
-        <td style="text-align:right;font-weight:600">${fmt(i.total)}</td>
-        <td style="text-align:right;color:var(--green);font-weight:500">${fmt(paid)}</td>
-        <td style="text-align:right;color:${bal>0?'#dc2626':'var(--green)'};font-weight:${bal>0?'600':'400'}">${fmt(bal)}</td>
-        <td><span class="badge ${stClass}">${st}</span></td>
-        <td style="font-size:10px;color:var(--muted)">${deptNames||'—'}</td>
-        <td style="color:var(--muted);font-size:11px">${i.date}</td>
-        <td onclick="event.stopPropagation()" style="white-space:nowrap">
-          ${bal>0 && hasPerm('inv.record_payment') ? `<button class="btn btn-sm btn-green" onclick="openPaymentModal('${i.id}')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>` : ''}
-          ${hasPerm('inv.delete') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="deleteInvoice('${i.id}')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>` : ''}
-        </td>
-      </tr>`;
+      return '<tr style="cursor:pointer" onclick="openInvoice(\''+i.id+'\')">'
+        +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+linkBadge+'</td>'
+        +'<td style="font-weight:500">'+i.clientName+'</td>'
+        +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
+        +'<td style="text-align:right;font-weight:600">'+fmt(dispTotal)+'</td>'
+        +'<td style="text-align:right;color:var(--green);font-weight:500">'+fmt(dispPaid)+'</td>'
+        +'<td style="text-align:right;color:'+(dispBal>0?'#dc2626':'var(--green)')+';font-weight:'+(dispBal>0?'600':'400')+'">'+fmt(dispBal)+'</td>'
+        +'<td><span class="badge '+stClass+'">'+dispSt+'</span></td>'
+        +'<td style="font-size:10px;color:var(--muted)">'+(deptNames||'—')+'</td>'
+        +'<td style="color:var(--muted);font-size:11px">'+i.date+'</td>'
+        +'<td onclick="event.stopPropagation()" style="white-space:nowrap">'+actBtns+'</td>'
+        +'</tr>';
     } else if (isQtTab) {
-      return `<tr style="cursor:pointer" onclick="openInvoice('${i.id}')">
-        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${i.id}${linkBadge}</td>
-        <td style="font-weight:500">${i.clientName}</td>
-        <td style="color:var(--muted);font-size:11px">${i.clientPhone||'—'}</td>
-        <td style="text-align:right;font-weight:600">${fmt(i.total)}</td>
-        <td style="font-size:11px;color:var(--muted)">${validUntil}</td>
-        <td><span class="badge ${stClass}">${st.charAt(0).toUpperCase()+st.slice(1)}</span></td>
-        <td style="font-size:10px;color:var(--muted)">${deptNames||'—'}</td>
-        <td style="color:var(--muted);font-size:11px">${i.date}</td>
-        <td onclick="event.stopPropagation()" style="white-space:nowrap">
-          ${st.toLowerCase()==='pending' && hasPerm('inv.create') ? `<button class="btn btn-sm btn-green" style="margin-right:3px;font-size:10px" onclick="event.stopPropagation();convertQuotationToInvoice('${i.id}')" title="Convert to Invoice"><i class="ti ti-file-invoice"></i></button>` : ''}
-          ${hasPerm('inv.delete') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="event.stopPropagation();deleteInvoice('${i.id}')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>` : ''}
-        </td>
-      </tr>`;
+      return '<tr style="cursor:pointer" onclick="openInvoice(\''+i.id+'\')">'
+        +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+linkBadge+'</td>'
+        +'<td style="font-weight:500">'+i.clientName+'</td>'
+        +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
+        +'<td style="text-align:right;font-weight:600">'+fmt(i.total)+'</td>'
+        +'<td style="font-size:11px;color:var(--muted)">'+validUntil+'</td>'
+        +'<td><span class="badge '+stClass+'">'+dispSt.charAt(0).toUpperCase()+dispSt.slice(1)+'</span></td>'
+        +'<td style="font-size:10px;color:var(--muted)">'+(deptNames||'—')+'</td>'
+        +'<td style="color:var(--muted);font-size:11px">'+i.date+'</td>'
+        +'<td onclick="event.stopPropagation()" style="white-space:nowrap">'+actBtns+'</td>'
+        +'</tr>';
     } else {
-      // Mixed / All view
-      return `<tr style="cursor:pointer" onclick="openInvoice('${i.id}')">
-        <td style="font-family:monospace;font-size:11px;color:var(--muted)">${i.id}${linkBadge}</td>
-        <td><span class="badge ${isQt?'badge-amber':'badge-blue'}" style="font-size:10px">${isQt?'Quote':'Invoice'}</span></td>
-        <td style="font-weight:500">${i.clientName}</td>
-        <td style="color:var(--muted);font-size:11px">${i.clientPhone||'—'}</td>
-        <td style="text-align:right;font-weight:600">${fmt(i.total)}</td>
-        <td style="text-align:right;color:var(--green);font-weight:500">${isQt?'—':fmt(paid)}</td>
-        <td style="text-align:right;color:${(!isQt&&bal>0)?'#dc2626':'var(--green)'};font-weight:${(!isQt&&bal>0)?'600':'400'}">${isQt?'—':fmt(bal)}</td>
-        <td><span class="badge ${stClass}">${st.charAt(0).toUpperCase()+st.slice(1)}</span></td>
-        <td style="font-size:10px;color:var(--muted)">${deptNames||'—'}</td>
-        <td style="color:var(--muted);font-size:11px">${i.date}</td>
-        <td onclick="event.stopPropagation()" style="white-space:nowrap">
-          ${!isQt && bal>0 && hasPerm('inv.record_payment') ? `<button class="btn btn-sm btn-green" onclick="openPaymentModal('${i.id}')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>` : ''}
-          ${isQt && (i.status||'').toLowerCase()==='pending' && hasPerm('inv.create') ? `<button class="btn btn-sm btn-green" style="margin-right:3px;font-size:10px" onclick="event.stopPropagation();convertQuotationToInvoice('${i.id}')" title="Convert to Invoice"><i class="ti ti-file-invoice"></i></button>` : ''}
-          ${hasPerm('inv.delete') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="event.stopPropagation();deleteInvoice('${i.id}')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>` : ''}
-        </td>
-      </tr>`;
+      return '<tr style="cursor:pointer" onclick="openInvoice(\''+i.id+'\')">'
+        +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+linkBadge+'</td>'
+        +'<td><span class="badge '+(isQt?'badge-amber':'badge-blue')+'" style="font-size:10px">'+(isQt?'Quote':'Invoice')+'</span></td>'
+        +'<td style="font-weight:500">'+i.clientName+'</td>'
+        +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
+        +'<td style="text-align:right;font-weight:600">'+fmt(dispTotal)+'</td>'
+        +'<td style="text-align:right;color:var(--green);font-weight:500">'+(isQt?'—':fmt(dispPaid))+'</td>'
+        +'<td style="text-align:right;color:'+((!isQt&&dispBal>0)?'#dc2626':'var(--green)')+';font-weight:'+((!isQt&&dispBal>0)?'600':'400')+'">'+(isQt?'—':fmt(dispBal))+'</td>'
+        +'<td><span class="badge '+stClass+'">'+dispSt.charAt(0).toUpperCase()+dispSt.slice(1)+'</span></td>'
+        +'<td style="font-size:10px;color:var(--muted)">'+(deptNames||'—')+'</td>'
+        +'<td style="color:var(--muted);font-size:11px">'+i.date+'</td>'
+        +'<td onclick="event.stopPropagation()" style="white-space:nowrap">'+actBtns+'</td>'
+        +'</tr>';
     }
   }
 
-  // ── Active tab class helper ───────────────────────────────
-  const tabCls = t => `doc-tab${invTypeFilter===t ? (t==='invoices'?' active-inv':t==='quotations'?' active-qt':' active-all') : ''}`;
+  var tabCls = function(t){ return 'doc-tab'+(invTypeFilter===t?(t==='invoices'?' active-inv':t==='quotations'?' active-qt':' active-all'):''); };
 
-  document.getElementById('page-invoices').innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:0">
-      <div class="doc-tabs" style="flex:1;min-width:0">
-        <div class="${tabCls('invoices')}" onclick="setInvTypeFilter('invoices')">
-          <i class="ti ti-file-invoice"></i> Invoices <span class="tab-count">${countInv}</span>
-        </div>
-        <div class="${tabCls('quotations')}" onclick="setInvTypeFilter('quotations')">
-          <i class="ti ti-file-text"></i> Quotations <span class="tab-count">${countQt}</span>
-        </div>
-        <div class="${tabCls('all')}" onclick="setInvTypeFilter('all')">
-          <i class="ti ti-list"></i> All <span class="tab-count">${countAll}</span>
-        </div>
-      </div>
-      <div class="search-bar" style="width:220px;margin:0 0 14px 0"><i class="ti ti-search"></i><input placeholder="Search name, ID, phone…" value="${invSearch}" oninput="invSearch=this.value;renderInvoices()"/></div>
-    </div>
-    ${pills}
-    <div class="card" style="padding:0;overflow:hidden">
-      <div style="overflow-x:auto">
-        <table class="table" style="width:100%;min-width:700px">
-          <thead>${thead}</thead>
-          <tbody>${!rows.length
-            ? `<tr><td colspan="${colspanEmpty}" style="color:var(--muted);text-align:center;padding:24px">
-                <div style="font-size:28px;margin-bottom:6px">${isQtTab?'📋':'🧾'}</div>
-                No ${isQtTab?'quotations':isInvTab?'invoices':'documents'} found${invSearch?' matching "'+invSearch+'"':''}
-              </td></tr>`
-            : rows.map(buildRow).join('')}
-          </tbody>
-        </table>
-      </div>
-      ${rows.length ? `<div style="padding:8px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);display:flex;justify-content:space-between">
-        <span>${rows.length} record${rows.length!==1?'s':''} shown</span>
-        <span>${isInvTab||isMixed?'Total billed: <strong>'+fmt(rows.filter(i=>i.type!=='quotation').reduce((s,i)=>s+i.total,0))+'</strong>':''}</span>
-      </div>` : ''}
-    </div>`;
+  // Dept badge for restricted users
+  var invDeptBadge = '';
+  if (invRestricted) {
+    invDeptBadge = '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px;padding:8px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:11px;color:#1e40af">'
+      +'<i class="ti ti-building-store" style="font-size:13px"></i>'
+      +'<span style="font-weight:600">Your departments:</span>'
+      +userInvDepts.map(function(d){return '<span style="display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid '+(d.color||'#2563eb')+';border-radius:12px;padding:2px 9px;font-size:10px;color:'+(d.color||'#2563eb')+';font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:'+(d.color||'#2563eb')+';display:inline-block"></span>'+d.name+'</span>';}).join('')
+      +'<span style="margin-left:auto;color:#64748b;font-size:10px">Amounts reflect your dept share</span>'
+      +'</div>';
+  }
+
+  var footerTotal = rows.filter(function(i){return i.type!=='quotation';}).reduce(function(s,i){
+    return s + (invRestricted ? invDeptShare(i, allowedInvSet).billed : i.total);
+  }, 0);
+
+  var bodyRows = '';
+  if (!rows.length) {
+    bodyRows = '<tr><td colspan="'+colspanEmpty+'" style="color:var(--muted);text-align:center;padding:24px"><div style="font-size:28px;margin-bottom:6px">'+(isQtTab?'📋':'🧾')+'</div>No '+(isQtTab?'quotations':isInvTab?'invoices':'documents')+' found'+(invSearch?' matching "'+invSearch+'"':'')+'</td></tr>';
+  } else {
+    bodyRows = rows.map(buildRow).join('');
+  }
+
+  var footerHtml = rows.length ? '<div style="padding:8px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);display:flex;justify-content:space-between"><span>'+rows.length+' record'+(rows.length!==1?'s':'')+' shown</span><span>'+(isInvTab||isMixed?'Total billed: <strong>'+fmt(footerTotal)+'</strong>':'')+'</span></div>' : '';
+
+  document.getElementById('page-invoices').innerHTML = invDeptBadge
+    + '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:0">'
+    + '<div class="doc-tabs" style="flex:1;min-width:0">'
+    + '<div class="'+tabCls('invoices')+'" onclick="setInvTypeFilter(\'invoices\')"><i class="ti ti-file-invoice"></i> Invoices <span class="tab-count">'+countInv+'</span></div>'
+    + '<div class="'+tabCls('quotations')+'" onclick="setInvTypeFilter(\'quotations\')"><i class="ti ti-file-text"></i> Quotations <span class="tab-count">'+countQt+'</span></div>'
+    + '<div class="'+tabCls('all')+'" onclick="setInvTypeFilter(\'all\')"><i class="ti ti-list"></i> All <span class="tab-count">'+countAll+'</span></div>'
+    + '</div>'
+    + '<div class="search-bar" style="width:220px;margin:0 0 14px 0"><i class="ti ti-search"></i><input placeholder="Search name, ID, phone\u2026" value="'+invSearch+'" oninput="invSearch=this.value;renderInvoices()"/></div>'
+    + '</div>'
+    + pills
+    + '<div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto"><table class="table" style="width:100%;min-width:700px"><thead>'+thead+'</thead><tbody>'+bodyRows+'</tbody></table></div>'
+    + footerHtml
+    + '</div>';
 }
 function setInvFilter(f) { invFilter = f; renderInvoices(); }
 function setInvTypeFilter(f) { invTypeFilter = f; invFilter = 'all'; renderInvoices(); }
@@ -5020,11 +5308,13 @@ async function deleteStaff(id, name) {
 
 // ── PERMISSIONS MODAL ─────────────────────────────────────
 const PERM_GROUP_ICONS = {
+  'Dashboard':  'ti-layout-dashboard',
   'Invoices':   'ti-file-invoice',
   'POS / Sales':'ti-device-desktop',
   'Clients':    'ti-users',
   'Inventory':  'ti-package',
   'Analytics':  'ti-chart-bar',
+  'Expenses':   'ti-cash-banknote-off',
   'Settings':   'ti-settings',
   'Staff':      'ti-id-badge',
 };
@@ -5036,29 +5326,76 @@ function openPermsModal(userId) {
   const role = u.role;
   const currentPerms = u.custom_perms || defaultPermsForRole(role);
 
+  // dashboard_depts: array of dept IDs the user can see on dashboard.
+  // null/empty = all their allowed_depts (inherits from allowed_depts).
+  const currentDashDepts = currentPerms.__dashboard_depts || null;
+  // User's allowed_depts (their dept scope):
+  const userAllowedDepts = (u.allowed_depts && u.allowed_depts.length) ? new Set(u.allowed_depts) : null;
+  // Depts to show in the picker = only the ones the user can already access
+  const deptPickerList = userAllowedDepts
+    ? DEPTS.filter(d => userAllowedDepts.has(d.id))
+    : DEPTS;
+
+  const isOwnerAdmin = role === 'owner' || role === 'admin';
+
   const groups = {};
   ACTION_PERMS.forEach(p => {
     if (!groups[p.group]) groups[p.group] = [];
     groups[p.group].push(p);
   });
 
+  // Build the Dashboard dept picker (only shown for non-owner/admin)
+  const deptPickerHtml = isOwnerAdmin ? '' : `
+    <div style="border:2px solid #bfdbfe;border-radius:8px;overflow:hidden;margin-bottom:2px">
+      <div style="background:#eff6ff;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="display:flex;align-items:center;gap:7px">
+          <i class="ti ti-building-store" style="font-size:14px;color:#2563eb"></i>
+          <span style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#1e40af">Dashboard — Department Access</span>
+        </div>
+        <span style="font-size:10px;color:#64748b">Which departments this user sees on Dashboard</span>
+      </div>
+      <div style="padding:10px 12px;background:#f8fbff">
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px">
+          <i class="ti ti-info-circle" style="font-size:11px"></i>
+          Uncheck all = user sees <strong>all</strong> their assigned departments (default).
+          Check specific ones to restrict Dashboard to only those departments.
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">
+          ${deptPickerList.length ? deptPickerList.map(d => {
+            const checked = currentDashDepts ? currentDashDepts.includes(d.id) : false;
+            return `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 8px;border:1px solid ${checked ? d.color||'#2563eb' : 'var(--border)'};border-radius:6px;background:${checked ? (d.color||'#2563eb')+'15' : '#fff'};transition:all .1s" id="ddept-label-${d.id}">
+              <input type="checkbox" name="dash-dept" value="${d.id}" ${checked ? 'checked' : ''}
+                style="width:14px;height:14px;accent-color:${d.color||'#2563eb'};cursor:pointer;flex-shrink:0"
+                onchange="_updateDashDeptLabel('${d.id}','${d.color||'#2563eb'}')"/>
+              <span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text);font-weight:500">
+                <span style="width:9px;height:9px;border-radius:50%;background:${d.color||'#888'};display:inline-block;flex-shrink:0"></span>
+                ${d.name}
+              </span>
+            </label>`;
+          }).join('') : `<div style="font-size:11px;color:var(--muted);padding:6px">No departments assigned to this user yet. Assign departments first via the Users table.</div>`}
+        </div>
+      </div>
+    </div>`;
+
   document.getElementById('role-modal-name').textContent = name;
   document.getElementById('role-modal-body').innerHTML = `
-    <div style="font-size:11px;color:var(--muted);margin-bottom:14px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:8px 12px">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:8px 12px">
       Role: <strong style="text-transform:capitalize;color:${ROLE_COLORS[role]||'var(--text)'}">${role}</strong>
-      &nbsp;·&nbsp; Check or uncheck each action. Unchecked = blocked for this user.
+      &nbsp;·&nbsp; Check or uncheck each permission. Unchecked = blocked for this user.
     </div>
-    <div style="display:grid;gap:10px;max-height:60vh;overflow-y:auto;padding-right:2px">
+    <div style="display:grid;gap:10px;max-height:62vh;overflow-y:auto;padding-right:2px">
+      ${deptPickerHtml}
       ${Object.entries(groups).map(([grp, perms]) => `
-        <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">
-          <div style="background:#f5f5f3;padding:7px 12px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:flex;align-items:center;gap:6px">
+        <div style="border:1px solid ${grp==='Dashboard'?'#c7d2fe':'var(--border)'};border-radius:8px;overflow:hidden">
+          <div style="background:${grp==='Dashboard'?'#eef2ff':'#f5f5f3'};padding:7px 12px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${grp==='Dashboard'?'#4338ca':'var(--muted)'};display:flex;align-items:center;gap:6px">
             <i class="ti ${PERM_GROUP_ICONS[grp]||'ti-lock'}" style="font-size:13px"></i>${grp}
+            ${grp==='Dashboard'?'<span style="font-weight:400;font-size:9px;color:#818cf8;margin-left:4px">— metric visibility</span>':''}
           </div>
           <div style="padding:6px 12px;display:grid;gap:2px">
             ${perms.map(p => `
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:5px 0;border-bottom:1px solid #f5f5f3">
-                <input type="checkbox" name="ap" value="${p.key}" ${currentPerms[p.key] ? 'checked' : ''}
-                  style="width:14px;height:14px;accent-color:var(--blue);cursor:pointer;flex-shrink:0"/>
+                <input type="checkbox" name="ap" value="${p.key}" ${currentPerms[p.key] !== false ? 'checked' : ''}
+                  style="width:14px;height:14px;accent-color:${grp==='Dashboard'?'#6366f1':'var(--blue)'};cursor:pointer;flex-shrink:0"/>
                 <span style="font-size:11.5px;color:var(--text)">${p.label}</span>
               </label>`).join('')}
           </div>
@@ -5075,10 +5412,26 @@ function openPermsModal(userId) {
   openModal('role-modal');
 }
 
+// Highlight dept label when checkbox toggled in perms modal
+function _updateDashDeptLabel(deptId, color) {
+  const lbl = document.getElementById('ddept-label-' + deptId);
+  const chk = lbl?.querySelector('input');
+  if (!lbl || !chk) return;
+  lbl.style.borderColor    = chk.checked ? color : 'var(--border)';
+  lbl.style.backgroundColor = chk.checked ? color + '15' : '#fff';
+}
+
 async function savePermsModal(userId) {
   const checks = document.querySelectorAll('#role-modal-body input[name="ap"]');
   const perms = {};
   checks.forEach(c => { perms[c.value] = c.checked; });
+
+  // Save selected dashboard departments (empty array = "all allowed depts" = no restriction)
+  const deptChecks = document.querySelectorAll('#role-modal-body input[name="dash-dept"]:checked');
+  const dashDepts = [...deptChecks].map(c => c.value);
+  // Store as a special key inside custom_perms (prefixed __ to separate from action perms)
+  perms.__dashboard_depts = dashDepts.length ? dashDepts : null;
+
   try {
     const { error } = await sb.from('pos_staff').update({ custom_perms: perms }).eq('id', userId);
     if (error) throw error;
@@ -5094,7 +5447,12 @@ async function savePermsModal(userId) {
 function resetPermsToDefault(userId, role) {
   const defaults = defaultPermsForRole(role);
   document.querySelectorAll('#role-modal-body input[name="ap"]').forEach(c => {
-    c.checked = defaults[c.value] === true;
+    c.checked = defaults[c.value] !== false;
+  });
+  // Clear all dashboard dept selections (resets to "all allowed depts")
+  document.querySelectorAll('#role-modal-body input[name="dash-dept"]').forEach(c => {
+    c.checked = false;
+    _updateDashDeptLabel(c.value, c.closest('label')?.style.borderColor || '#2563eb');
   });
 }
 
