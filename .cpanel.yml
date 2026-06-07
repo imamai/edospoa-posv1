@@ -1,0 +1,5 @@
+---
+deployment:
+  tasks:
+    - export DEPLOYPATH=/home/sehigvkd/public_html/mejasanmedia.edoscentre.co.ke
+    - /bin/cp -R * $DEPLOYPATH
