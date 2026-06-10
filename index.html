@@ -108,6 +108,17 @@ body{background:var(--page-bg);color:var(--text);font-size:13px}
 .sp-pending.active{background:#dbeafe;color:#1e40af;border-color:#93c5fd}
 .sp-converted.active{background:#dcfce7;color:#166534;border-color:#86efac}
 .sp-expired.active{background:#f3f4f6;color:#4b5563;border-color:#d1d5db}
+.sp-draft.active{background:#f1f5f9;color:#334155;border-color:#94a3b8}
+.sp-void.active{background:#f3f4f6;color:#6b7280;border-color:#d1d5db}
+.sp-cash.active{background:#d1fae5;color:#065f46;border-color:#6ee7b7}
+.sp-sent.active{background:#dbeafe;color:#1e40af;border-color:#93c5fd}
+.sp-accepted.active{background:#dcfce7;color:#166534;border-color:#86efac}
+.sp-declined.active{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
+.badge-teal{background:#d1fae5;color:#065f46}
+.badge-void{background:#f3f4f6;color:#6b7280}
+.held-banner{background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#854d0e;display:flex;align-items:center;gap:8px}
+.void-banner{background:#f3f4f6;border:2px dashed #9ca3af;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#6b7280;display:flex;align-items:center;gap:8px}
+.cash-banner{background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:10px 14px;margin-bottom:10px;font-size:12px;color:#065f46;display:flex;align-items:center;gap:8px}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 input,select,textarea{background:#fff;border:1px solid var(--border);border-radius:7px;padding:8px 10px;color:var(--text);font-size:12px;width:100%}
@@ -227,16 +238,17 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px}
 .receipt-logo{font-size:24px;font-weight:900;color:var(--red)}
 .receipt-company{font-size:9px;color:var(--muted);margin-top:4px}
 .receipt-items{margin-bottom:14px;border-bottom:1px dashed var(--border);padding-bottom:12px}
-.receipt-item-line{display:grid;grid-template-columns:1fr 60px;gap:8px;margin-bottom:8px;align-items:start}
-.receipt-item-desc{font-size:10px;line-height:1.4}
+.receipt-item-line{display:flex;justify-content:space-between;gap:8px;margin-bottom:8px;align-items:start}
+.receipt-item-desc{font-size:10px;line-height:1.4;flex:1;min-width:0}
 .receipt-item-desc strong{display:block;color:var(--text)}
 .receipt-item-desc span{color:var(--muted);font-size:9px}
-.receipt-item-price{text-align:right;font-weight:700;color:var(--red)}
+.receipt-item-price{text-align:right;font-weight:700;color:var(--red);white-space:nowrap;flex-shrink:0}
 .receipt-totals{margin-bottom:14px;border-bottom:1px dashed var(--border);padding-bottom:12px}
-.receipt-total-line{display:grid;grid-template-columns:1fr 60px;margin-bottom:6px}
+.receipt-total-line{display:flex;justify-content:space-between;margin-bottom:6px}
+.receipt-total-line span:last-child{white-space:nowrap;text-align:right}
 .receipt-total-line.final{font-size:13px;font-weight:700;color:var(--text);margin-top:8px}
-.receipt-total-line.final .label{color:var(--text)}
-.receipt-total-line.final .amount{color:var(--red)}
+.receipt-total-line.final .label{color:var(--text);flex:1}
+.receipt-total-line.final .amount{color:var(--red);white-space:nowrap}
 .receipt-footer{text-align:center;font-size:9px;color:var(--muted);line-height:1.6}
 .receipt-footer-line{margin-bottom:6px}
 @media print{
@@ -612,6 +624,35 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
     </div>
   </div>
 
+  <!-- Held Orders Modal -->
+  <div class="modal-bg" id="held-orders-modal" onclick="if(event.target===this)closeModal('held-orders-modal')">
+    <div class="modal" style="width:560px;max-width:95vw">
+      <div class="modal-hdr">
+        <span><i class="ti ti-clock-pause" style="color:#d97706"></i> Held Orders</span>
+        <button class="btn btn-outline btn-sm" onclick="closeModal('held-orders-modal')"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:18px" id="held-orders-body"></div>
+    </div>
+  </div>
+
+  <!-- Void Reason Modal -->
+  <div class="modal-bg" id="void-modal" onclick="if(event.target===this)closeModal('void-modal')">
+    <div class="modal" style="width:420px">
+      <div class="modal-hdr">
+        <span><i class="ti ti-ban" style="color:#6b7280"></i> Void Invoice</span>
+        <button class="btn btn-outline btn-sm" onclick="closeModal('void-modal')"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:18px;display:grid;gap:12px">
+        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;font-size:12px;color:#991b1b">
+          <i class="ti ti-alert-triangle"></i> Voiding removes this invoice from revenue reports. This cannot be undone.
+        </div>
+        <input type="hidden" id="void-inv-id"/>
+        <div><label>Reason for voiding *</label><input id="void-reason" placeholder="e.g. Duplicate, client cancelled, data entry error…"/></div>
+        <button class="btn btn-sm" style="background:#6b7280;color:#fff;justify-content:center;width:100%" onclick="confirmVoidInvoice()"><i class="ti ti-ban"></i> Confirm Void</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Inventory Item Modal -->
   <div class="modal-bg" id="inv-item-modal">
     <div class="modal" style="width:440px">
@@ -646,6 +687,9 @@ const fmt = n => 'KSh ' + Math.round(n).toLocaleString();
 const now = () => new Date();
 const dateStr = d => (d || now()).toLocaleDateString('en-KE', {day:'2-digit', month:'short', year:'numeric'});
 const timeStr = d => (d || now()).toLocaleTimeString('en-KE', {hour:'2-digit', minute:'2-digit'});
+// Returns the currently selected sale date (supports backdating from POS date input)
+const saleDate = () => posDate ? dateStr(posDate) : dateStr();
+const saleTime = () => posDate ? timeStr(posDate) : timeStr();
 const uid = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 
 // Derive an ID prefix from a name — first letter of each word, uppercase,
@@ -696,6 +740,16 @@ function nextQuotationNumber() {
     }
   });
   return getIdPrefix() + '-QT-' + String(maxN + 1).padStart(3, '0');
+}
+function nextCashSaleNumber() {
+  let maxN = 100; // first cash sale is <PREFIX>-CS-101
+  invoices.forEach(i => {
+    if (i.type === 'cash_sale' && typeof i.id === 'string') {
+      const m = i.id.match(/-CS-(\d+)$/);
+      if (m) { const n = parseInt(m[1], 10); if (n > maxN) maxN = n; }
+    }
+  });
+  return getIdPrefix() + '-CS-' + String(maxN + 1).padStart(3, '0');
 }
 function genReferralCode(name) {
   const prefix = (name || 'CL').replace(/[^a-zA-Z]/g, '').slice(0, 2).toUpperCase().padEnd(2, 'X');
@@ -1605,13 +1659,17 @@ async function persistShopSettings() {
 
 // State
 let cart = [], payMethod = 'cash', invoices = [], clients = [], payments = [], expenses = [];
-let activeDept = 'all', invFilter = 'all', invTypeFilter = 'all', invSearch = '', clientSearch = '';
-let activePeriod = 'all', mpesaPhone = '';
+let activeDept = 'all', invFilter = 'all', invTypeFilter = 'all', invSearch = '', invDeptFilter = 'all', clientSearch = '';
+let activePeriod = 'all', mpesaPhone = '', mpesaMode = 'stk';
 let periodFrom = '', periodTo = '';
 let svcSearch = '', svcDeptFilter = 'all';
 let analyticsChart = null;
 let dashboardChart = null;
 let dashChartPeriod = 'month'; // default chart period: today|week|month|last7|last30|year
+let dashPeriod = 'today';      // dashboard KPI period
+let dashFrom   = '';           // custom range ISO start
+let dashTo     = '';           // custom range ISO end
+let posDate    = null;         // null = today; Date object for backdated entries
 let expSearch = '', expCatFilter = 'all', expFromFilter = '', expToFilter = '', expDeptFilter = 'all';
 
 // Expense categories. "Cost of Goods Sold" is treated as a DIRECT cost
@@ -1734,15 +1792,30 @@ function computeFinancials(periodInvList) {
 
 // ── Computed helpers ─────────────────────────────────────
 function invPayments(invId) { return payments.filter(p => p.invoiceId === invId); }
-function invPaid(inv) { return invPayments(inv.id).reduce((a, p) => a + p.amount, 0); }
+function invPaid(inv) { return invPayments(inv.cashSaleRef || inv.id).reduce((a, p) => a + p.amount, 0); }
 function invBalance(inv) { return inv.total - invPaid(inv); }
 function invStatus(inv) {
+  if (inv.status === 'draft')   return 'Draft';
+  if (inv.status === 'Voided')  return 'Voided';
+  if (inv.type  === 'cash_sale') { const b = invBalance(inv); return b <= 0 ? 'Paid' : 'Partial'; }
+  if (inv.cashSaleRef)          { const b = invBalance(inv); return b <= 0 ? 'Paid' : 'Partial'; }
   if (inv.payMethod !== 'credit') return inv.status;
   const bal = invBalance(inv);
   if (bal <= 0) return 'Paid';
   const paid = invPaid(inv);
   if (paid > 0) return 'Partial';
   return 'Unpaid';
+}
+
+// Returns invoices that count toward revenue: excludes quotations, drafts, voided, and
+// retroactive invoices (those are paper docs whose cash was already captured in the cash_sale).
+function revenueInvoices() {
+  return invoices.filter(i =>
+    i.type !== 'quotation' &&
+    i.status !== 'draft' &&
+    i.status !== 'Voided' &&
+    !i.cashSaleRef
+  );
 }
 
 function buildSidebar() {
@@ -1903,51 +1976,123 @@ function invDeptShare(inv, deptIdSet) {
   return { billed, collected };
 }
 
+// ── Dashboard period helper ───────────────────────────────
+function dashPeriodRange() {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const iso = d => d.toISOString().slice(0,10);
+  if (dashPeriod === 'today')     return { from: iso(today), to: iso(today) };
+  if (dashPeriod === 'yesterday') { const y = new Date(today); y.setDate(y.getDate()-1); return { from: iso(y), to: iso(y) }; }
+  if (dashPeriod === 'week')      { const mon = new Date(today); mon.setDate(today.getDate()-((today.getDay()+6)%7)); return { from: iso(mon), to: iso(today) }; }
+  if (dashPeriod === 'month')     { const m = new Date(today.getFullYear(), today.getMonth(), 1); return { from: iso(m), to: iso(today) }; }
+  if (dashPeriod === 'last30')    { const l = new Date(today); l.setDate(today.getDate()-29); return { from: iso(l), to: iso(today) }; }
+  if (dashPeriod === 'year')      { return { from: today.getFullYear()+'-01-01', to: iso(today) }; }
+  if (dashPeriod === 'custom')    return { from: dashFrom, to: dashTo };
+  return { from: null, to: null };
+}
+function filterDashPeriod(list) {
+  const { from, to } = dashPeriodRange();
+  if (!from && !to) return list;
+  const f = from ? new Date(from + 'T00:00:00') : null;
+  const t = to   ? new Date(to   + 'T23:59:59') : null;
+  return list.filter(i => {
+    const d = parseInvDate(i.date); if (!d) return true;
+    if (f && d < f) return false;
+    if (t && d > t) return false;
+    return true;
+  });
+}
+function setDashPeriod(p) { dashPeriod = p; renderDashboard(); }
+function applyDashCustom() {
+  dashFrom = document.getElementById('dash-from')?.value || '';
+  dashTo   = document.getElementById('dash-to')?.value   || '';
+  dashPeriod = 'custom';
+  renderDashboard();
+}
+
 function renderDashboard() {
   const { depts: userDepts, restricted } = getDashboardDepts();
   const allowedDeptIds = new Set(userDepts.map(d => d.id));
 
-  // Shorthand for dashboard metric perms (owner always true)
   const isOwnerAdmin = currentUser?.role === 'owner' || currentUser?.role === 'admin';
+  const isCashier    = currentUser?.role === 'cashier';
   const dp = key => isOwnerAdmin || hasPerm(key);
 
-  const allInv  = invoices.filter(i => i.type !== 'quotation');
-  const qtOnly  = invoices.filter(i => i.type === 'quotation');
+  const allRevInv = revenueInvoices();
+  const qtOnly    = invoices.filter(i => i.type === 'quotation');
+  const heldCount = invoices.filter(i => i.status === 'draft').length;
 
-  // Scope invoices: if restricted, only those with at least one item in user's depts
+  // Period-filtered revenue invoices
+  const periodAllInv = filterDashPeriod(allRevInv);
+
+  // Dept-scoped
   const invOnly = restricted
-    ? allInv.filter(inv => inv.items.some(item => allowedDeptIds.has(item.dept)))
-    : allInv;
+    ? periodAllInv.filter(inv => inv.items.some(item => allowedDeptIds.has(item.dept)))
+    : periodAllInv;
 
-  // ── KPI metrics ──────────────────────────────────────────
-  const todayStr  = new Date().toLocaleDateString('en-KE', {day:'2-digit', month:'short', year:'numeric'});
-  let total = 0, paid = 0, partial = 0, unpaid = 0, todayRev = 0, todayCount = 0;
+  // ── Period label ──────────────────────────────────────────
+  const periodLabels = { today:'Today', yesterday:'Yesterday', week:'This Week', month:'This Month', last30:'Last 30 Days', year:'This Year', custom:'Custom' };
+  const periodLabel  = periodLabels[dashPeriod] || 'Period';
 
+  // ── Period filter bar ─────────────────────────────────────
+  const quickBtns = ['today','yesterday','week','month','last30','year'].map(k =>
+    `<button class="btn btn-sm ${dashPeriod===k?'btn-red':'btn-outline'}" style="font-size:10px;padding:3px 9px" onclick="setDashPeriod('${k}')">${periodLabels[k]}</button>`
+  ).join('');
+  const customRow = dashPeriod === 'custom' ? `
+    <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+      <input type="date" id="dash-from" value="${dashFrom}" style="padding:3px 7px;border:1px solid var(--border);border-radius:6px;font-size:11px" onchange="applyDashCustom()"/>
+      <span style="font-size:11px;color:var(--muted)">to</span>
+      <input type="date" id="dash-to"   value="${dashTo}"   style="padding:3px 7px;border:1px solid var(--border);border-radius:6px;font-size:11px" onchange="applyDashCustom()"/>
+      <button class="btn btn-sm btn-red" style="font-size:10px;padding:3px 9px" onclick="applyDashCustom()">Apply</button>
+    </div>` : '';
+  const periodBar = `
+    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:12px;padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px">
+      <i class="ti ti-calendar-stats" style="font-size:13px;color:#64748b;margin-right:2px"></i>
+      ${quickBtns}
+      <button class="btn btn-sm ${dashPeriod==='custom'?'btn-red':'btn-outline'}" style="font-size:10px;padding:3px 9px" onclick="setDashPeriod('custom')"><i class="ti ti-calendar-event"></i> Custom</button>
+    </div>
+    ${customRow}`;
+
+  // ── KPI metrics (period-scoped) ───────────────────────────
+  let total = 0, paid = 0, partial = 0, unpaid = 0, periodCount = 0;
   if (!restricted) {
     total   = invOnly.reduce((a, i) => a + i.total, 0);
     unpaid  = invOnly.filter(i => invStatus(i) === 'Unpaid').reduce((a, i) => a + invBalance(i), 0);
     partial = invOnly.filter(i => invStatus(i) === 'Partial').reduce((a, i) => a + invBalance(i), 0);
     paid    = invOnly.filter(i => invStatus(i) === 'Paid').reduce((a, i) => a + i.total, 0);
-    const todayInvs = invOnly.filter(i => i.date === todayStr);
-    todayRev = todayInvs.reduce((a, i) => a + i.total, 0);
-    todayCount = todayInvs.length;
+    periodCount = invOnly.length;
   } else {
     invOnly.forEach(inv => {
       const { billed, collected: coll } = invDeptShare(inv, allowedDeptIds);
-      total += billed;
+      total += billed; periodCount++;
       const bal = billed - coll;
       const st = invStatus(inv);
       if (st === 'Paid')    paid    += billed;
       if (st === 'Partial') partial += bal;
       if (st === 'Unpaid')  unpaid  += bal;
-      if (inv.date === todayStr) { todayRev += billed; todayCount++; }
     });
   }
 
-  // ── Department revenue bars (only user's depts) ──────────
+  // ── Payment breakdown for period ─────────────────────────
+  // Only use payments whose invoiceId is in the period-filtered invoice set
+  const periodInvIds = new Set(invOnly.map(i => i.id));
+  // Also include cash_sale payments for the period
+  filterDashPeriod(invoices.filter(i => i.type === 'cash_sale')).forEach(i => {
+    if (!restricted || i.items.some(it => allowedDeptIds.has(it.dept))) periodInvIds.add(i.id);
+  });
+  const periodPayments = payments.filter(p => periodInvIds.has(p.invoiceId));
+  const payByMethod = {};
+  periodPayments.forEach(p => {
+    const m = (p.method || 'cash').toLowerCase();
+    payByMethod[m] = (payByMethod[m] || 0) + (p.amount || 0);
+  });
+  const totalCollected = periodPayments.reduce((s, p) => s + (p.amount || 0), 0);
+  const methodIcons  = { cash:'ti-cash', mpesa:'ti-device-mobile', bank:'ti-building-bank', card:'ti-credit-card', cheque:'ti-writing' };
+  const methodColors = { cash:'#16a34a', mpesa:'#2563eb', bank:'#7c3aed', card:'#0891b2', cheque:'#d97706' };
+
+  // ── Department revenue bars ───────────────────────────────
   const deptTotals = {};
   userDepts.forEach(d => { deptTotals[d.id] = 0; });
-  allInv.forEach(inv => inv.items.forEach(item => {
+  periodAllInv.forEach(inv => inv.items.forEach(item => {
     if (allowedDeptIds.has(item.dept))
       deptTotals[item.dept] = (deptTotals[item.dept] || 0) + item.price * item.qty;
   }));
@@ -1956,30 +2101,61 @@ function renderDashboard() {
   const qtPending    = qtOnly.filter(i => i.status === 'Pending');
   const qtPendingVal = qtPending.reduce((a, i) => a + i.total, 0);
 
-  // ── Recent invoices (dept-filtered for restricted users) ────
-  // For restricted users: only include invoices that have items in their allowed depts.
-  // invOnly already filters to those invoices; recentInvs just slices the latest 8.
+  // ── Recent invoices ───────────────────────────────────────
   const recentInvs = [...invOnly].reverse().slice(0, 8);
 
   // ── Dept scope badge ──────────────────────────────────────
   const deptScopeBadge = restricted
-    ? `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px;padding:8px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:11px;color:#1e40af">
+    ? `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px;padding:8px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:11px;color:#1e40af">
         <i class="ti ti-building-store" style="font-size:13px"></i>
         <span style="font-weight:600">Your departments:</span>
         ${userDepts.map(d => `<span style="display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid ${d.color||'#2563eb'};border-radius:12px;padding:2px 9px;font-size:10px;color:${d.color||'#2563eb'};font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:${d.color||'#2563eb'};display:inline-block"></span>${d.name}</span>`).join('')}
-        <span style="margin-left:auto;color:#64748b;font-size:10px">All metrics filtered to your assigned dept${userDepts.length > 1 ? 's' : ''}</span>
+        <span style="margin-left:auto;color:#64748b;font-size:10px">Metrics filtered to your dept${userDepts.length > 1 ? 's' : ''}</span>
       </div>` : '';
 
-  // ── Build visible KPI stat cards ─────────────────────────
+  // ── KPI stat cards ────────────────────────────────────────
   const statCards = [
-    dp('dash.view_billed')      ? `<div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Total Billed</div><div class="stat-value">${fmt(total)}</div><div class="stat-sub">${invOnly.length} invoice${invOnly.length===1?'':'s'}</div></div>` : '',
-    dp('dash.view_collected')   ? `<div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Collected</div><div class="stat-value">${fmt(paid)}</div><div class="stat-sub">Fully paid</div></div>` : '',
+    dp('dash.view_billed')      ? `<div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Total Billed</div><div class="stat-value">${fmt(total)}</div><div class="stat-sub">${periodCount} record${periodCount===1?'':'s'} · ${periodLabel}</div></div>` : '',
+    dp('dash.view_collected')   ? `<div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Collected</div><div class="stat-value">${fmt(paid)}</div><div class="stat-sub">Fully paid · ${periodLabel}</div></div>` : '',
     dp('dash.view_partial')     ? `<div class="stat-card" style="border-top-color:var(--amber)"><div class="stat-label">Partial Balance</div><div class="stat-value">${fmt(partial)}</div><div class="stat-sub">Ongoing credit</div></div>` : '',
     dp('dash.view_outstanding') ? `<div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Outstanding</div><div class="stat-value">${fmt(unpaid)}</div><div class="stat-sub">No payment yet</div></div>` : '',
-    dp('dash.view_today')       ? `<div class="stat-card" style="border-top-color:var(--blue)"><div class="stat-label">Today's Sales</div><div class="stat-value">${fmt(todayRev)}</div><div class="stat-sub">${todayCount} txn${todayCount===1?'':'s'}</div></div>` : '',
-    // Quotations card always visible (not a financial metric)
-    `<div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">Pending Quotations</div><div class="stat-value">${fmt(qtPendingVal)}</div><div class="stat-sub">${qtPending.length} open · ${qtOnly.length} total</div></div>`,
+    dp('dash.view_today')       ? `<div class="stat-card" style="border-top-color:var(--blue)"><div class="stat-label">${periodLabel} Payments</div><div class="stat-value">${fmt(totalCollected)}</div><div class="stat-sub">${periodPayments.length} txn${periodPayments.length===1?'':'s'}</div></div>` : '',
+    // Quotation card — hidden for cashier role
+    (!isCashier && dp('inv.create')) ? `<div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">Pending Quotations</div><div class="stat-value">${fmt(qtPendingVal)}</div><div class="stat-sub">${qtPending.length} open · ${qtOnly.length} total${heldCount ? ' · <span style="color:#d97706;font-weight:600">'+heldCount+' held</span>' : ''}</div></div>` : '',
   ].filter(Boolean).join('');
+
+  // ── Payment breakdown card ────────────────────────────────
+  const showPayments = dp('dash.view_collected') || dp('dash.view_today');
+  const methodOrder  = ['cash','mpesa','bank','card','cheque'];
+  const allMethods   = [...new Set([...methodOrder, ...Object.keys(payByMethod)])];
+  const payRows = allMethods.filter(m => payByMethod[m] > 0).map(m => {
+    const icon  = methodIcons[m]  || 'ti-cash';
+    const color = methodColors[m] || '#64748b';
+    const pct   = totalCollected > 0 ? Math.round(payByMethod[m] / totalCollected * 100) : 0;
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+      <div style="width:28px;height:28px;border-radius:8px;background:${color}18;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <i class="ti ${icon}" style="font-size:13px;color:${color}"></i>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">
+          <span style="font-weight:600;text-transform:capitalize">${m}</span>
+          <span style="font-weight:700">${fmt(payByMethod[m])}</span>
+        </div>
+        <div style="height:4px;background:#f1f5f9;border-radius:4px;overflow:hidden">
+          <div style="height:100%;background:${color};width:${pct}%;border-radius:4px"></div>
+        </div>
+      </div>
+      <span style="font-size:10px;color:var(--muted);min-width:28px;text-align:right">${pct}%</span>
+    </div>`;
+  }).join('');
+  const paymentCard = showPayments ? `
+    <div class="card" style="margin-bottom:14px;padding:14px 16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div class="card-title" style="margin:0"><i class="ti ti-credit-card" style="color:var(--green)"></i> Payments · ${periodLabel}</div>
+        <span style="font-size:12px;font-weight:700;color:var(--green)">${fmt(totalCollected)}</span>
+      </div>
+      ${payRows || '<div style="color:var(--muted);font-size:12px;text-align:center;padding:12px 0">No payments in this period</div>'}
+    </div>` : '';
 
   // ── Revenue chart ─────────────────────────────────────────
   const chartHtml = dp('dash.view_chart') ? `
@@ -1999,9 +2175,9 @@ function renderDashboard() {
       <div style="position:relative;width:100%;height:200px"><canvas id="dash-revenue-chart"></canvas></div>
     </div>` : '';
 
-  // ── Bottom two-col ────────────────────────────────────────
-  // Build recent invoice rows outside template literals to avoid nesting issues
+  // ── Recent invoice rows ───────────────────────────────────
   const _invRow = function(i) {
+    const typeBadge = i.type === 'cash_sale' ? '<span class="badge badge-teal" style="font-size:9px;margin-right:3px">CS</span>' : '';
     if (restricted) {
       const share = invDeptShare(i, allowedDeptIds);
       const deptBilled    = share.billed;
@@ -2015,7 +2191,7 @@ function renderDashboard() {
       const badgeCls = deptSt === 'Paid' ? 'badge-green' : deptSt === 'Partial' ? 'badge-amber' : 'badge-red';
       const balColor = deptBal > 0 ? '#dc2626' : 'var(--green)';
       return '<tr onclick="openInvoice(\'' + i.id + '\')" style="cursor:pointer">'
-        + '<td><div style="color:var(--muted);font-size:10px">' + i.id + '</div>'
+        + '<td><div style="color:var(--muted);font-size:10px">' + typeBadge + i.id + '</div>'
         + '<div style="font-size:9px;color:var(--muted);margin-top:1px">' + deptNames + '</div></td>'
         + '<td style="font-weight:500">' + i.clientName + '</td>'
         + '<td style="font-weight:600">' + fmt(deptBilled) + '</td>'
@@ -2026,22 +2202,24 @@ function renderDashboard() {
       const st  = invStatus(i);
       const bal = invBalance(i);
       const badgeCls = st === 'Paid' ? 'badge-green' : st === 'Partial' ? 'badge-amber' : 'badge-red';
-      const balColor = bal > 0 ? '#dc2626' : 'var(--green)';
+      const balCell = bal > 0
+        ? '<span style="color:#dc2626;font-weight:700;background:#fff5f5;border:1px solid #fca5a5;border-radius:4px;padding:1px 6px;font-size:11px">' + fmt(bal) + '</span>'
+        : '<span style="color:var(--green);font-size:11px">' + fmt(bal) + '</span>';
       return '<tr onclick="openInvoice(\'' + i.id + '\')" style="cursor:pointer">'
-        + '<td style="color:var(--muted);font-size:10px">' + i.id + '</td>'
+        + '<td style="color:var(--muted);font-size:10px">' + typeBadge + i.id + '</td>'
         + '<td style="font-weight:500">' + i.clientName + '</td>'
         + '<td style="font-weight:600">' + fmt(i.total) + '</td>'
-        + '<td style="color:' + balColor + '">' + fmt(bal) + '</td>'
+        + '<td>' + balCell + '</td>'
         + '<td><span class="badge ' + badgeCls + '">' + st + '</span></td>'
         + '</tr>';
     }
   }
   const invoiceRows = !recentInvs.length
-    ? '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:16px">No invoices yet</td></tr>'
+    ? '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:16px">No records in this period</td></tr>'
     : recentInvs.map(_invRow).join('');
 
   const deptLabel = restricted ? ' <span style="font-size:10px;font-weight:400;color:var(--muted)">(your dept' + (userDepts.length > 1 ? 's' : '') + ')</span>' : '';
-  const amtHeader = restricted ? 'Dept Items Billed' : 'Amount';
+  const amtHeader = restricted ? 'Dept Billed' : 'Amount';
   const balHeader = restricted ? 'Dept Balance' : 'Balance';
 
   const showInvoices  = dp('dash.view_invoices');
@@ -2050,8 +2228,8 @@ function renderDashboard() {
     '<div class="' + (showInvoices && showDeptBars ? 'two-col' : '') + '" style="margin-bottom:14px">'
     + (showInvoices
         ? '<div class="card">'
-        + '<div class="card-title"><i class="ti ti-receipt" style="color:var(--red)"></i> Recent Invoices' + deptLabel + '</div>'
-        + '<table class="table"><thead><tr><th>Invoice</th><th>Client</th><th>' + amtHeader + '</th><th>' + balHeader + '</th><th>Status</th></tr></thead>'
+        + '<div class="card-title"><i class="ti ti-receipt" style="color:var(--red)"></i> Recent Activity' + deptLabel + '</div>'
+        + '<table class="table"><thead><tr><th>Ref</th><th>Client</th><th>' + amtHeader + '</th><th>' + balHeader + '</th><th>Status</th></tr></thead>'
         + '<tbody>' + invoiceRows + '</tbody></table>'
         + '</div>'
         : '')
@@ -2068,11 +2246,12 @@ function renderDashboard() {
 
   document.getElementById('page-dashboard').innerHTML = `
     ${deptScopeBadge}
+    ${periodBar}
     <div class="stats-grid">${statCards}</div>
+    ${paymentCard}
     ${chartHtml}
     ${bottomHtml}`;
 
-  // Draw chart if visible
   if (dp('dash.view_chart')) {
     _renderDashboardLineChart(invOnly, allowedDeptIds, restricted, userDepts);
   }
@@ -2273,6 +2452,7 @@ function startNewSale() {
   cart = [];
   payMethod = 'cash';
   mpesaPhone = '';
+  mpesaMode  = 'stk';
   if (typeof window !== 'undefined') window._pendingInv = null;
   renderPOS();
   if (typeof nav === 'function') nav('pos', 0);
@@ -2283,6 +2463,7 @@ function renderPOS() {
   // into a brand-new sale (payment method, m-pesa phone, pending m-pesa invoice).
   payMethod = 'cash';
   mpesaPhone = '';
+  mpesaMode  = 'stk';
   if (typeof window !== 'undefined') window._pendingInv = null;
   const vd = visibleDepts();
   // If cashier is restricted to one dept, auto-select it and skip "All" tab
@@ -2352,13 +2533,46 @@ function renderPOS() {
             <button class="pay-btn"        id="pm-credit" onclick="selPM('credit')"><i class="ti ti-clock"></i> Credit</button>
           </div>
           <div id="mpesa-phone-row" style="display:none;margin-bottom:8px">
-            <div class="mpesa-box"><label><i class="ti ti-device-mobile"></i> M-Pesa Phone</label>
-              <input id="mpesa-phone" placeholder="e.g. 0712345678" style="margin-top:5px" oninput="mpesaPhone=this.value"/>
-              <div style="font-size:10px;color:var(--muted);margin-top:4px">Paybill: <strong style="color:var(--green)">522533</strong> · Acc: <strong style="color:var(--green)">7616319</strong></div>
+            <div class="mpesa-box">
+              <div style="display:flex;gap:5px;margin-bottom:9px">
+                <button id="mpesa-mode-stk" class="pay-btn active" style="flex:1;font-size:10px;padding:6px 4px" onclick="setMpesaMode('stk')">
+                  <i class="ti ti-device-mobile"></i> STK Push
+                </button>
+                <button id="mpesa-mode-direct" class="pay-btn" style="flex:1;font-size:10px;padding:6px 4px" onclick="setMpesaMode('direct')">
+                  <i class="ti ti-cash"></i> Paid to Till
+                </button>
+              </div>
+              <div id="mpesa-phone-input-row">
+                <label><i class="ti ti-device-mobile"></i> M-Pesa Phone</label>
+                <input id="mpesa-phone" placeholder="e.g. 0712345678" style="margin-top:5px" oninput="mpesaPhone=this.value"/>
+              </div>
+              <div id="mpesa-direct-note" style="display:none;font-size:10px;color:#166534;background:#dcfce7;border-radius:5px;padding:6px 8px">
+                <i class="ti ti-check"></i> Customer paid directly to the till — no PIN prompt needed.
+              </div>
+              <div style="font-size:10px;color:var(--muted);margin-top:6px">Paybill: <strong style="color:var(--green)">522533</strong> · Acc: <strong style="color:var(--green)">7616319</strong> · Till: <strong style="color:var(--green)">9013189</strong></div>
             </div>
           </div>
-          <button class="btn btn-red" style="width:100%;justify-content:center;font-size:13px" onclick="checkout()"><i class="ti ti-check"></i> Complete Sale &amp; Invoice</button>
-          <button class="btn btn-amber" style="width:100%;justify-content:center;font-size:13px;margin-top:6px" onclick="checkoutAsQuotation()"><i class="ti ti-file-text"></i> Save as Quotation</button>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:5px 8px">
+            <i class="ti ti-calendar" style="font-size:12px;color:#64748b;flex-shrink:0"></i>
+            <span style="font-size:10px;color:#64748b;white-space:nowrap">Sale date:</span>
+            <input type="date" id="pos-date-input" style="flex:1;border:none;background:transparent;font-size:11px;color:#1e293b;outline:none;min-width:0"
+              onchange="setPosDate(this.value)" title="Backdate entry — leave blank for today"/>
+            <button onclick="clearPosDate()" id="pos-date-clear" style="display:none;border:none;background:none;color:#dc2626;font-size:11px;cursor:pointer;padding:0 2px" title="Clear — use today"><i class="ti ti-x"></i></button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:5px">
+            <button class="btn" style="background:#065f46;color:#fff;justify-content:center;font-size:12px;padding:9px" onclick="checkoutAsCashSale()"><i class="ti ti-receipt"></i> Cash Sale</button>
+            <button class="btn btn-red" style="justify-content:center;font-size:12px;padding:9px" onclick="checkout()"><i class="ti ti-file-invoice"></i> Invoice</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+            <button class="btn btn-amber" style="justify-content:center;font-size:12px;padding:9px" onclick="checkoutAsQuotation()"><i class="ti ti-file-text"></i> Quotation</button>
+            <button class="btn btn-outline" style="justify-content:center;font-size:12px;padding:9px;position:relative" onclick="holdOrder()" id="hold-order-btn">
+              <i class="ti ti-clock-pause"></i> Hold
+              <span id="held-count-badge" style="display:none;position:absolute;top:-6px;right:-6px;background:#d97706;color:#fff;border-radius:50%;width:18px;height:18px;font-size:9px;font-weight:700;line-height:18px;text-align:center"></span>
+            </button>
+          </div>
+          <button class="btn btn-outline" style="width:100%;justify-content:center;font-size:11px;padding:5px;margin-top:5px;color:#d97706;border-color:#fde68a;background:#fffdf5" onclick="showHeldOrders()" id="resume-held-btn" style="display:none">
+            <i class="ti ti-list"></i> <span id="resume-held-lbl">Held Orders</span>
+          </button>
         </div>
       </div>
     </div>`;
@@ -2409,10 +2623,37 @@ function updateCartPaidDisplay() {
   if (span && paid > 0 && paid < total) span.textContent = fmt(total - paid);
 }
 
+function setPosDate(isoVal) {
+  if (!isoVal) { clearPosDate(); return; }
+  const t = new Date();
+  const [y, m, d] = isoVal.split('-').map(Number);
+  posDate = new Date(y, m - 1, d, t.getHours(), t.getMinutes(), t.getSeconds());
+  const clr = document.getElementById('pos-date-clear');
+  if (clr) clr.style.display = 'inline';
+}
+function clearPosDate() {
+  posDate = null;
+  const inp = document.getElementById('pos-date-input');
+  const clr = document.getElementById('pos-date-clear');
+  if (inp) inp.value = '';
+  if (clr) clr.style.display = 'none';
+}
+
+function updateHeldBadge() {
+  const held = invoices.filter(i => i.status === 'draft');
+  const badge = document.getElementById('held-count-badge');
+  const btn   = document.getElementById('resume-held-btn');
+  const lbl   = document.getElementById('resume-held-lbl');
+  if (badge) { badge.textContent = held.length; badge.style.display = held.length ? 'block' : 'none'; }
+  if (btn)   btn.style.display = held.length ? 'flex' : 'none';
+  if (lbl)   lbl.textContent = held.length + ' Held Order' + (held.length !== 1 ? 's' : '');
+}
+
 function updateCartUI() {
   const el = document.getElementById('cart-items'); if (!el) return;
   const lbl = document.getElementById('cart-count-lbl');
   if (lbl) lbl.textContent = cart.length + ' item' + (cart.length !== 1 ? 's' : '');
+  updateHeldBadge();
   if (!cart.length) {
     el.innerHTML = '<div style="color:var(--muted);font-size:11px;text-align:center;padding:16px">Tap a service to add</div>';
     recalc(); return;
@@ -2450,29 +2691,7 @@ function setPrice(id, v) {
 }
 
 function openServicePicker(id) {
-  const s = SERVICES.find(x => x.id === id); if (!s) return;
-  const items = s.desc.split(',').map(x => x.trim()).filter(Boolean);
-  if (items.length <= 1) { addToCart(id); return; }
-  const d = DEPTS.find(x => x.id === s.dept);
-  document.getElementById('svc-picker-body').innerHTML = `
-    <div style="background:#fff8f8;border:1px solid #fca5a5;border-radius:8px;padding:10px;margin-bottom:12px">
-      <div style="font-size:12px;font-weight:600;margin-bottom:1px">${s.name}</div>
-      <div style="font-size:10px;color:var(--muted);margin-bottom:8px">${d?.name || s.dept} · Full package — ${fmt(s.price)}</div>
-      <button class="btn btn-red" style="width:100%;justify-content:center;font-size:12px" onclick="addToCart('${id}');closeModal('svc-picker-modal')">
-        <i class="ti ti-package"></i> Add Full Package — ${fmt(s.price)}
-      </button>
-    </div>
-    <div style="font-size:10px;color:var(--muted);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.4px">Or add individual items (set price in cart)</div>
-    <div style="display:grid;gap:5px">
-      ${items.map((item, idx) => `
-        <div style="display:flex;align-items:center;justify-content:space-between;background:#fafaf8;border:1px solid var(--border);border-radius:7px;padding:7px 10px;gap:8px">
-          <span style="font-size:12px;flex:1">${item}</span>
-          <button class="btn btn-sm btn-outline" onclick="addSubItemToCart('${id}',${idx})">
-            <i class="ti ti-plus"></i> Add
-          </button>
-        </div>`).join('')}
-    </div>`;
-  openModal('svc-picker-modal');
+  addToCart(id);
 }
 
 function addSubItemToCart(parentId, itemIdx) {
@@ -2499,11 +2718,24 @@ function recalc() {
 
 function selPM(pm) {
   payMethod = pm;
+  if (pm !== 'mpesa') { mpesaMode = 'stk'; }
   ['cash','mpesa','bank','credit'].forEach(p => {
     const b = document.getElementById('pm-' + p); if (b) b.classList.toggle('active', p === pm);
   });
   const row = document.getElementById('mpesa-phone-row');
   if (row) row.style.display = pm === 'mpesa' ? 'block' : 'none';
+  if (pm === 'mpesa') setMpesaMode(mpesaMode);
+}
+function setMpesaMode(mode) {
+  mpesaMode = mode;
+  const btnStk = document.getElementById('mpesa-mode-stk');
+  const btnDir = document.getElementById('mpesa-mode-direct');
+  const phoneRow  = document.getElementById('mpesa-phone-input-row');
+  const directNote = document.getElementById('mpesa-direct-note');
+  if (btnStk) btnStk.classList.toggle('active', mode === 'stk');
+  if (btnDir) btnDir.classList.toggle('active', mode === 'direct');
+  if (phoneRow)   phoneRow.style.display   = mode === 'stk'    ? 'block' : 'none';
+  if (directNote) directNote.style.display = mode === 'direct' ? 'block' : 'none';
 }
 
 function onClientSelect(id) {
@@ -2559,21 +2791,21 @@ async function checkout() {
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
     vatRate, vatAmt,
     total, payMethod, status: payMethod === 'credit' ? 'Unpaid' : (isPartial ? 'Partial' : 'Paid'),
-    date: dateStr(), time: timeStr(), eventDate: eventDate || dateStr(),
+    date: saleDate(), time: saleTime(), eventDate: eventDate || saleDate(),
     cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
     sendEmail, sendWhatsApp,
   };
 
   // Auto-record initial payment for non-credit sales
   if (payMethod !== 'credit') {
-    const p = { id: uid(), invoiceId: inv.id, amount: amountPaid, method: payMethod, note: isPartial ? 'Partial payment' : 'Initial payment', paidAt: dateStr() + ' ' + timeStr() };
+    const p = { id: uid(), invoiceId: inv.id, amount: amountPaid, method: payMethod, note: isPartial ? 'Partial payment' : 'Initial payment', paidAt: saleDate() + ' ' + saleTime() };
     payments.push(p);
     await dbInsertPayment(p);
   }
 
-  if (payMethod === 'mpesa') {
+  if (payMethod === 'mpesa' && mpesaMode === 'stk') {
     const phone = mpesaPhone || clientPhone;
-    if (!phone) { alert('Please enter an M-Pesa phone number.'); return; }
+    if (!phone) { alert('Please enter an M-Pesa phone number for STK Push.'); return; }
     showMpesaSTK(inv, phone);
   } else {
     await finalizeInvoice(inv);
@@ -2699,7 +2931,7 @@ async function checkoutAsQuotation() {
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
     vatRate, vatAmt, total,
     payMethod: 'quotation', status: 'Pending',
-    date: dateStr(), time: timeStr(), eventDate: eventDate || dateStr(),
+    date: saleDate(), time: saleTime(), eventDate: eventDate || saleDate(),
     cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
   };
   invoices.push(qt);
@@ -2711,9 +2943,153 @@ async function checkoutAsQuotation() {
   renderDashboard();
 }
 
+// ── CASH SALE CHECKOUT ───────────────────────────────────
+async function checkoutAsCashSale() {
+  if (!cart.length) { alert('Cart is empty.'); return; }
+  if (!hasPerm('inv.create')) { alert('You do not have permission.'); return; }
+  // Credit not valid for a cash sale
+  if (payMethod === 'credit') { alert('Cash Sale cannot be Credit. Choose Cash, M-Pesa, or Bank.'); return; }
+
+  const { sub, da, vatRate, vatAmt, total, disc } = recalc();
+  const clientSel   = document.getElementById('cart-client')?.value;
+  let   clientName  = document.getElementById('cart-cname')?.value.trim();
+  const clientPhone = document.getElementById('cart-cphone')?.value.trim();
+  const clientEmail = document.getElementById('cart-cemail')?.value.trim();
+  const clientWA    = document.getElementById('cart-cwhatsapp')?.value.trim();
+  const eventDate   = document.getElementById('cart-date')?.value;
+
+  if (!clientName) clientName = 'Walk-in #' + uid();
+
+  if (!clientSel && clientPhone) {
+    const existing = clients.find(c => c.phone === clientPhone);
+    if (!existing) {
+      const nc = { id: uid(), name: clientName, phone: clientPhone, email: clientEmail || '', event: '', birthday: null, notes: '', referral_code: null, referred_by: null, createdAt: dateStr() };
+      clients.push(nc);
+      await dbInsertClient(nc);
+    }
+  }
+
+  if (payMethod === 'mpesa' && mpesaMode === 'stk') {
+    const phone = mpesaPhone || clientPhone;
+    if (!phone) { alert('Please enter an M-Pesa phone number for STK Push.'); return; }
+  }
+
+  const cartPaidAmt = parseFloat(document.getElementById('cart-paid')?.value) || 0;
+  const amountPaid  = (cartPaidAmt > 0 && cartPaidAmt < total) ? cartPaidAmt : total;
+  const isPartial   = amountPaid < total;
+
+  const cs = {
+    id: nextCashSaleNumber(),
+    type: 'cash_sale',
+    clientName, clientPhone, clientEmail: clientEmail || '',
+    clientWhatsApp: clientWA || '', clientId: clientSel || null,
+    items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
+    vatRate, vatAmt, total,
+    payMethod, status: isPartial ? 'Partial' : 'Paid',
+    date: saleDate(), time: saleTime(), eventDate: eventDate || saleDate(),
+    cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
+  };
+
+  const p = { id: uid(), invoiceId: cs.id, amount: amountPaid, method: payMethod, note: isPartial ? 'Partial payment' : 'Cash sale payment', paidAt: saleDate() + ' ' + saleTime() };
+  payments.push(p);
+  await dbInsertPayment(p);
+
+  if (payMethod === 'mpesa' && mpesaMode === 'stk') {
+    showMpesaSTK(cs, mpesaPhone || clientPhone);
+  } else {
+    await finalizeInvoice(cs);
+  }
+}
+
+// ── HOLD ORDER ────────────────────────────────────────────
+async function holdOrder() {
+  if (!cart.length) { alert('Cart is empty.'); return; }
+  const { sub, da, vatRate, vatAmt, total, disc } = recalc();
+  const clientSel   = document.getElementById('cart-client')?.value;
+  let   clientName  = document.getElementById('cart-cname')?.value.trim();
+  const clientPhone = document.getElementById('cart-cphone')?.value.trim();
+  const clientEmail = document.getElementById('cart-cemail')?.value.trim();
+  const eventDate   = document.getElementById('cart-date')?.value;
+
+  if (!clientName) clientName = 'Walk-in #' + uid();
+
+  const held = {
+    id: 'HOLD-' + uid(),
+    type: 'invoice',
+    status: 'draft',
+    clientName, clientPhone, clientEmail: clientEmail || '',
+    clientId: clientSel || null,
+    items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
+    vatRate, vatAmt, total,
+    payMethod,
+    date: dateStr(), time: timeStr(), eventDate: eventDate || dateStr(),
+    cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
+  };
+
+  invoices.push(held);
+  await dbInsertInvoice(held);
+  cart = [];
+  mpesaPhone = '';
+  renderPOS();
+  renderDashboard();
+}
+
+function showHeldOrders() {
+  const held = invoices.filter(i => i.status === 'draft');
+  const body = document.getElementById('held-orders-body');
+  if (!held.length) {
+    body.innerHTML = '<div style="color:var(--muted);text-align:center;padding:24px;font-size:12px">No held orders</div>';
+  } else {
+    body.innerHTML = held.map(h => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:#fafaf8">
+        <div>
+          <div style="font-weight:600;font-size:12px">${h.clientName} <span style="font-size:10px;color:var(--muted);font-family:monospace;font-weight:400">${h.id}</span></div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">${h.items.length} item${h.items.length!==1?'s':''} · ${fmt(h.total)} · Held ${h.date} ${h.time}</div>
+          <div style="font-size:10px;color:var(--muted)">${(h.items||[]).slice(0,3).map(i=>i.name).join(', ')}${h.items.length>3?' …':''}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0;margin-left:10px">
+          <button class="btn btn-sm btn-green" onclick="resumeHeldOrder('${h.id}')"><i class="ti ti-player-play"></i> Resume</button>
+          <button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteHeldOrder('${h.id}')"><i class="ti ti-trash"></i></button>
+        </div>
+      </div>`).join('');
+  }
+  openModal('held-orders-modal');
+}
+
+async function resumeHeldOrder(id) {
+  const held = invoices.find(i => i.id === id && i.status === 'draft');
+  if (!held) return;
+  if (!confirm('Resume this held order? It will be removed from the hold list.')) return;
+  cart = JSON.parse(JSON.stringify(held.items || []));
+  invoices = invoices.filter(i => i.id !== id);
+  if (useSupabase) await sb.from('invoices').delete().eq('id', id).eq('shop_id', currentShopId);
+  closeModal('held-orders-modal');
+  nav('pos', 0);
+  renderPOS();
+  setTimeout(() => {
+    const cn = document.getElementById('cart-cname');
+    const cp = document.getElementById('cart-cphone');
+    const ce = document.getElementById('cart-cemail');
+    if (cn && held.clientName && !held.clientName.startsWith('Walk-in #')) cn.value = held.clientName;
+    if (cp) cp.value = held.clientPhone || '';
+    if (ce) ce.value = held.clientEmail || '';
+    if (held.discountPct) { const d = document.getElementById('disc-pct'); if (d) d.value = held.discountPct; }
+    updateCartUI();
+  }, 80);
+}
+
+async function deleteHeldOrder(id) {
+  if (!confirm('Discard this held order?')) return;
+  invoices = invoices.filter(i => i.id !== id);
+  if (useSupabase) await sb.from('invoices').delete().eq('id', id).eq('shop_id', currentShopId);
+  showHeldOrders();
+  updateHeldBadge();
+  renderDashboard();
+}
+
 // ── INVOICE BUILDERS ─────────────────────────────────────
 function buildInvoiceHTML(inv) {
-  const pays = invPayments(inv.id);
+  const pays = invPayments(inv.cashSaleRef || inv.id);
   const totalPaid = pays.reduce((a, p) => a + p.amount, 0);
   const balance = inv.total - totalPaid;
   const S = SETTINGS;
@@ -2814,14 +3190,27 @@ function buildInvoiceHTML(inv) {
         ${inv.discountAmt > 0 ? `<div class="inv-totals-line discount"><span class="lbl">Discount (${inv.discountPct}%)</span><span class="val">&minus; ${fmt(inv.discountAmt)}</span></div>` : ''}
         ${inv.vatAmt > 0 ? `<div class="inv-totals-line"><span class="lbl">VAT (${inv.vatRate}%)</span><span class="val">${fmt(inv.vatAmt)}</span></div>` : ''}
         <div class="inv-totals-line" style="font-weight:700;font-size:13px;border-top:2px solid #ccc;padding-top:8px;margin-top:4px"><span class="lbl" style="color:#111">Total</span><span class="val" style="color:#111">${fmt(inv.total)}</span></div>
+        ${totalPaid > 0 ? `<div class="inv-totals-line" style="color:#16a34a;margin-top:4px"><span class="lbl">Amount Paid</span><span class="val">&minus; ${fmt(totalPaid)}</span></div>` : ''}
+        ${totalPaid > 0 && balance > 0 ? `<div class="inv-totals-line" style="color:#dc2626;font-weight:700;border-top:1px dashed #fca5a5;padding-top:6px;margin-top:4px"><span class="lbl">Balance Due</span><span class="val">${fmt(balance)}</span></div>` : ''}
       </div>
     </div>
     <div style="display:flex;justify-content:flex-end;margin-bottom:4px">
-      <div class="inv-amount-due">
-        <span class="lbl">Amount Due</span>
-        <span class="val">${fmt(amountDue)}</span>
-      </div>
+      ${balance > 0
+        ? `<div class="inv-amount-due" style="border-color:#dc2626;background:#fff5f5">
+             <span class="lbl" style="color:#dc2626">Outstanding Balance</span>
+             <span class="val" style="color:#dc2626">${fmt(balance)}</span>
+           </div>`
+        : `<div class="inv-amount-due" style="border-color:#16a34a;background:#f0fdf4">
+             <span class="lbl" style="color:#16a34a">Paid in Full</span>
+             <span class="val" style="color:#16a34a">${fmt(inv.total)}</span>
+           </div>`
+      }
     </div>
+    ${totalPaid > 0 && balance > 0 ? `
+    <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:7px;padding:9px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:11px;color:#9a3412"><strong style="font-size:12px">Partial Payment</strong> &mdash; ${fmt(totalPaid)} received</div>
+      <div style="font-size:13px;font-weight:800;color:#dc2626">Balance: ${fmt(balance)}</div>
+    </div>` : ''}
     ${pays.length ? `<div class="inv-payments">
       <div class="inv-payments-hd">Payments Received</div>
       ${pays.map(p => `<div class="inv-pay-row">
@@ -2997,7 +3386,9 @@ function buildReceiptHTML(inv) {
   const S = SETTINGS;
   return `<div class="receipt-container">
     <div class="receipt-header">
-      <div class="receipt-logo">M</div>
+      ${S.logoDataUrl
+        ? `<img src="${S.logoDataUrl}" style="max-height:52px;max-width:140px;object-fit:contain;display:block;margin:0 auto 6px"/>`
+        : `<div class="receipt-logo">${(S.bizName||'M')[0].toUpperCase()}</div>`}
       <div class="receipt-company"><strong>${S.bizName.toUpperCase()}</strong><br/>${S.bizLocation}<br/>${S.bizPhone1}</div>
     </div>
     <div style="text-align:center;font-size:9px;margin-bottom:10px">
@@ -3019,10 +3410,14 @@ function buildReceiptHTML(inv) {
       ${inv.discountAmt > 0 ? `<div class="receipt-total-line"><span>Discount</span><span style="text-align:right">-${fmt(inv.discountAmt)}</span></div>` : ''}
       ${inv.vatAmt > 0 ? `<div class="receipt-total-line"><span>VAT (${inv.vatRate}%)</span><span style="text-align:right">${fmt(inv.vatAmt)}</span></div>` : ''}
       <div class="receipt-total-line final"><span class="label">TOTAL</span><span class="amount">${fmt(inv.total)}</span></div>
-      ${pays.length ? `<div style="margin-top:8px;border-top:1px dashed var(--border);padding-top:8px">
-        <div class="receipt-total-line"><span>Paid</span><span style="text-align:right;color:var(--green);font-weight:700">${fmt(totalPaid)}</span></div>
-        ${balance > 0 ? `<div class="receipt-total-line"><span>Balance</span><span style="text-align:right;color:#dc2626;font-weight:700">${fmt(balance)}</span></div>` : ''}
-      </div>` : ''}
+      <div style="margin-top:8px;border-top:1px dashed var(--border);padding-top:8px">
+        <div class="receipt-total-line"><span style="font-weight:600">Amount Paid</span><span style="text-align:right;color:var(--green);font-weight:700">${fmt(totalPaid)}</span></div>
+        ${balance > 0
+          ? `<div class="receipt-total-line"><span style="font-weight:600;color:#dc2626">Balance Due</span><span style="text-align:right;color:#dc2626;font-weight:700">${fmt(balance)}</span></div>
+             <div style="text-align:center;margin-top:6px;padding:4px 8px;background:#fee2e2;border:1px dashed #fca5a5;border-radius:4px;font-size:9px;font-weight:700;color:#dc2626;letter-spacing:.5px">PARTIAL PAYMENT — BALANCE OUTSTANDING</div>`
+          : `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#dcfce7;border:1px dashed #86efac;border-radius:4px;font-size:9px;font-weight:700;color:#166534;letter-spacing:.5px">PAID IN FULL</div>`
+        }
+      </div>
     </div>
     <div class="receipt-footer">
       <div class="receipt-footer-line"><strong>Payment Method</strong></div>
@@ -3040,26 +3435,50 @@ function openInvoice(id) { showInvoice(id); }
 function showInvoice(idOrInv) {
   const inv = typeof idOrInv === 'string' ? invoices.find(i => i.id === idOrInv) : idOrInv;
   if (!inv) return;
+
+  const isCashSale  = inv.type === 'cash_sale';
   const isQuotation = inv.type === 'quotation';
-  const pays = isQuotation ? [] : invPayments(inv.id);
+  const isDraft     = inv.status === 'draft';
+  const isVoided    = inv.status === 'Voided';
+  const isRetroInv  = !isCashSale && !isQuotation && !!inv.cashSaleRef;
+
+  const pays = (isQuotation || isDraft) ? [] : invPayments(inv.cashSaleRef || inv.id);
   const totalPaid = pays.reduce((a, p) => a + p.amount, 0);
-  const balance = inv.total - totalPaid;
-  const status = isQuotation ? inv.status : invStatus(inv);
+  const balance   = inv.total - totalPaid;
+  const status    = isQuotation ? inv.status : invStatus(inv);
 
-  // Update modal header title to reflect document type
+  // Update modal header
   const modalHdr = document.querySelector('#inv-modal .modal-hdr span');
-  if (modalHdr) modalHdr.innerHTML = isQuotation
-    ? '<i class="ti ti-file-text" style="color:#d97706"></i> Quotation Details'
-    : '<i class="ti ti-file-invoice" style="color:var(--red)"></i> Invoice Details';
+  if (modalHdr) {
+    if (isCashSale)  modalHdr.innerHTML = '<i class="ti ti-receipt" style="color:#065f46"></i> Cash Sale Details';
+    else if (isDraft) modalHdr.innerHTML = '<i class="ti ti-clock-pause" style="color:#d97706"></i> Held Order';
+    else if (isVoided) modalHdr.innerHTML = '<i class="ti ti-ban" style="color:#6b7280"></i> Invoice (Voided)';
+    else if (isQuotation) modalHdr.innerHTML = '<i class="ti ti-file-text" style="color:#d97706"></i> Quotation Details';
+    else modalHdr.innerHTML = '<i class="ti ti-file-invoice" style="color:var(--red)"></i> Invoice Details';
+  }
 
-  const payHistoryHTML = (!isQuotation && pays.length) ? `
+  // Special banners
+  const voidBanner = isVoided
+    ? `<div class="void-banner"><i class="ti ti-ban" style="font-size:18px"></i><div><strong>VOIDED</strong>${inv.voidReason ? ' — ' + inv.voidReason : ''}<br/><span style="font-size:10px">Voided by ${inv.voidedBy||'—'} on ${inv.voidedAt||'—'}</span></div></div>` : '';
+
+  const cashSaleBanner = isRetroInv
+    ? `<div class="cash-banner"><i class="ti ti-receipt" style="font-size:15px"></i> This invoice was generated from Cash Sale <strong>${inv.cashSaleRef}</strong>. Revenue already recorded — this is a paper document only.</div>` : '';
+
+  const convertedBanner = (isQuotation && inv.status === 'converted' && inv.invoiceRef)
+    ? `<div style="background:#dcfce7;border:1px solid #bbf7d0;border-radius:8px;padding:10px;margin-top:10px;font-size:12px;color:#166534"><i class="ti ti-circle-check"></i> Converted to Invoice <strong>${inv.invoiceRef}</strong></div>` : '';
+
+  const cashSaleInvoicedBanner = (isCashSale && inv.invoiceRef)
+    ? `<div class="cash-banner" style="margin-top:10px"><i class="ti ti-file-invoice" style="font-size:15px"></i> Formal invoice issued: <strong>${inv.invoiceRef}</strong></div>` : '';
+
+  // Payment history
+  const payHistoryHTML = (!isQuotation && !isDraft && pays.length) ? `
     <div style="margin-top:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px">
       <div style="font-size:10px;font-weight:600;color:#166534;margin-bottom:6px;text-transform:uppercase">Payment History</div>
       ${pays.map(p => `<div class="pay-history-item">
         <span style="color:var(--muted);font-size:10px;flex:0 0 auto">${p.paidAt}</span>
         <span style="text-transform:capitalize;flex:1;padding:0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.method}${p.note ? ' — ' + p.note : ''}</span>
         <span style="font-weight:600;color:var(--green);margin-right:6px">${fmt(p.amount)}</span>
-        ${hasPerm('inv.record_payment') ? `
+        ${hasPerm('inv.record_payment') && !isVoided ? `
           <button class="btn btn-sm btn-outline" style="padding:2px 6px;font-size:10px;margin-right:3px" onclick="openEditPaymentModal('${p.id}')" title="Edit payment"><i class="ti ti-pencil" style="font-size:11px"></i></button>
           <button class="btn btn-sm" style="padding:2px 6px;font-size:10px;background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deletePayment('${p.id}')" title="Delete payment"><i class="ti ti-trash" style="font-size:11px"></i></button>
         ` : ''}
@@ -3067,11 +3486,8 @@ function showInvoice(idOrInv) {
       <div style="display:flex;justify-content:space-between;padding-top:6px;margin-top:4px;border-top:1px solid #bbf7d0;font-size:11px;font-weight:600;color:#166534">
         <span>Total Paid</span><span>${fmt(totalPaid)}</span>
       </div>
-      ${balance > 0 ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:12px;font-weight:700;color:#dc2626"><span>Balance Due</span><span>${fmt(balance)}</span></div>` : ''}
+      ${balance > 0 && !isRetroInv ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:12px;font-weight:700;color:#dc2626"><span>Balance Due</span><span>${fmt(balance)}</span></div>` : ''}
     </div>` : '';
-
-  const convertedBanner = (isQuotation && inv.status === 'converted' && inv.invoiceRef)
-    ? `<div style="background:#dcfce7;border:1px solid #bbf7d0;border-radius:8px;padding:10px;margin-top:10px;font-size:12px;color:#166534"><i class="ti ti-circle-check"></i> Converted to Invoice <strong>${inv.invoiceRef}</strong></div>` : '';
 
   const waBtn = inv.clientWhatsApp
     ? `<button class="btn btn-sm btn-outline" onclick="sendInvoiceViaWhatsApp('${inv.id}','${inv.clientWhatsApp}')"><i class="ti ti-brand-whatsapp" style="color:#25d366"></i> WhatsApp</button>`
@@ -3080,29 +3496,74 @@ function showInvoice(idOrInv) {
     ? `<button class="btn btn-sm btn-outline" onclick="sendInvoiceViaEmail('${inv.id}','${inv.clientEmail}','${inv.clientName}')"><i class="ti ti-mail" style="color:#ea4335"></i> Email</button>`
     : '';
 
-  const actionBar = isQuotation
-    ? `<div style="margin-top:16px;display:flex;gap:8px;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap">
-        <button class="btn btn-red btn-sm" onclick="downloadQuotationPDF('${inv.id}')"><i class="ti ti-pdf"></i> Quotation PDF</button>
-        ${emailBtn}${waBtn}
-        <button class="btn btn-outline btn-sm" onclick="window.print()"><i class="ti ti-printer"></i> Print</button>
-        ${hasPerm('inv.edit') ? `<button class="btn btn-outline btn-sm" onclick="openEditInvoice('${inv.id}')"><i class="ti ti-pencil"></i> Edit</button>` : ''}
-        ${inv.status !== 'converted' && hasPerm('inv.create') ? `<button class="btn btn-green btn-sm" onclick="convertQuotationToInvoice('${inv.id}')"><i class="ti ti-file-invoice"></i> Generate Invoice</button>` : ''}
-        ${hasPerm('inv.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteInvoice('${inv.id}');closeModal('inv-modal')"><i class="ti ti-trash"></i> Delete</button>` : ''}
-      </div>`
-    : `<div style="margin-top:16px;display:flex;gap:8px;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap">
-        <button class="btn btn-red btn-sm" onclick="downloadInvoicePDF('${inv.id}')"><i class="ti ti-pdf"></i> Invoice PDF</button>
-        <button class="btn btn-outline btn-sm" onclick="downloadReceiptPDF('${inv.id}')"><i class="ti ti-printer"></i> Receipt PDF</button>
-        ${emailBtn}${waBtn}
-        <button class="btn btn-outline btn-sm" onclick="window.print()"><i class="ti ti-printer"></i> Print</button>
-        ${hasPerm('inv.edit') ? `<button class="btn btn-outline btn-sm" onclick="openEditInvoice('${inv.id}')"><i class="ti ti-pencil"></i> Edit</button>` : ''}
-        ${balance > 0 && hasPerm('inv.record_payment') ? `<button class="btn btn-green btn-sm" onclick="openPaymentModal('${inv.id}')"><i class="ti ti-plus"></i> Record Payment</button>` : ''}
-        ${status === 'Unpaid' && hasPerm('inv.record_payment') ? `<button class="btn btn-amber btn-sm" onclick="markFullyPaid('${inv.id}')"><i class="ti ti-check"></i> Mark Paid</button>` : ''}
-        ${hasPerm('inv.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteInvoice('${inv.id}');closeModal('inv-modal')"><i class="ti ti-trash"></i> Delete</button>` : ''}
-      </div>`;
+  // Quotation-status action buttons
+  const qtStatusBtns = isQuotation && inv.status !== 'converted' ? `
+    ${inv.status !== 'sent'     ? `<button class="btn btn-sm btn-outline" onclick="updateQuotationStatus('${inv.id}','sent')"><i class="ti ti-send"></i> Mark Sent</button>` : ''}
+    ${inv.status !== 'accepted' ? `<button class="btn btn-sm btn-green" onclick="updateQuotationStatus('${inv.id}','accepted')"><i class="ti ti-thumb-up"></i> Mark Accepted</button>` : ''}
+    ${inv.status !== 'declined' ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="updateQuotationStatus('${inv.id}','declined')"><i class="ti ti-thumb-down"></i> Decline</button>` : ''}
+  ` : '';
+
+  // Build action bar by document type
+  let actionBar = '';
+  if (isDraft) {
+    actionBar = `<div style="margin-top:16px;display:flex;gap:8px;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap">
+      <button class="btn btn-green btn-sm" onclick="closeModal('inv-modal');resumeHeldOrder('${inv.id}')"><i class="ti ti-player-play"></i> Resume Order</button>
+      ${hasPerm('inv.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteHeldOrder('${inv.id}');closeModal('inv-modal')"><i class="ti ti-trash"></i> Discard</button>` : ''}
+    </div>`;
+  } else if (isCashSale) {
+    actionBar = `<div style="margin-top:16px;display:flex;gap:8px;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap">
+      <button class="btn btn-outline btn-sm" onclick="downloadReceiptPDF('${inv.id}')"><i class="ti ti-printer"></i> Receipt PDF</button>
+      ${emailBtn}${waBtn}
+      <button class="btn btn-outline btn-sm" onclick="window.print()"><i class="ti ti-printer"></i> Print</button>
+      ${!inv.invoiceRef && hasPerm('inv.create') ? `<button class="btn btn-sm" style="background:#1e40af;color:#fff" onclick="convertCashSaleToInvoice('${inv.id}')"><i class="ti ti-file-invoice"></i> Generate Invoice</button>` : ''}
+      ${hasPerm('inv.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteInvoice('${inv.id}');closeModal('inv-modal')"><i class="ti ti-trash"></i> Delete</button>` : ''}
+    </div>`;
+  } else if (isQuotation) {
+    actionBar = `<div style="margin-top:16px;display:flex;gap:8px;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap">
+      <button class="btn btn-red btn-sm" onclick="downloadQuotationPDF('${inv.id}')"><i class="ti ti-pdf"></i> Quotation PDF</button>
+      ${emailBtn}${waBtn}
+      <button class="btn btn-outline btn-sm" onclick="window.print()"><i class="ti ti-printer"></i> Print</button>
+      ${hasPerm('inv.edit') ? `<button class="btn btn-outline btn-sm" onclick="openEditInvoice('${inv.id}')"><i class="ti ti-pencil"></i> Edit</button>` : ''}
+      ${qtStatusBtns}
+      ${inv.status !== 'converted' && inv.status !== 'declined' && hasPerm('inv.create') ? `<button class="btn btn-green btn-sm" onclick="convertQuotationToInvoice('${inv.id}')"><i class="ti ti-file-invoice"></i> Generate Invoice</button>` : ''}
+      ${hasPerm('inv.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteInvoice('${inv.id}');closeModal('inv-modal')"><i class="ti ti-trash"></i> Delete</button>` : ''}
+    </div>`;
+  } else if (isVoided) {
+    actionBar = `<div style="margin-top:16px;display:flex;gap:8px;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap">
+      <button class="btn btn-outline btn-sm" onclick="downloadInvoicePDF('${inv.id}')"><i class="ti ti-pdf"></i> Invoice PDF</button>
+      ${hasPerm('inv.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteInvoice('${inv.id}');closeModal('inv-modal')"><i class="ti ti-trash"></i> Delete</button>` : ''}
+    </div>`;
+  } else {
+    // Regular invoice
+    const canVoid = (currentUser.role === 'owner' || currentUser.role === 'admin') && !isVoided;
+    actionBar = `<div style="margin-top:16px;display:flex;gap:8px;border-top:1px solid var(--border);padding-top:14px;flex-wrap:wrap">
+      <button class="btn btn-red btn-sm" onclick="downloadInvoicePDF('${inv.id}')"><i class="ti ti-pdf"></i> Invoice PDF</button>
+      <button class="btn btn-outline btn-sm" onclick="downloadReceiptPDF('${inv.id}')"><i class="ti ti-printer"></i> Receipt PDF</button>
+      ${emailBtn}${waBtn}
+      <button class="btn btn-outline btn-sm" onclick="window.print()"><i class="ti ti-printer"></i> Print</button>
+      ${hasPerm('inv.edit') ? `<button class="btn btn-outline btn-sm" onclick="openEditInvoice('${inv.id}')"><i class="ti ti-pencil"></i> Edit</button>` : ''}
+      ${balance > 0 && !isRetroInv && hasPerm('inv.record_payment') ? `<button class="btn btn-green btn-sm" onclick="openPaymentModal('${inv.id}')"><i class="ti ti-plus"></i> Record Payment</button>` : ''}
+      ${status === 'Unpaid' && hasPerm('inv.record_payment') ? `<button class="btn btn-amber btn-sm" onclick="markFullyPaid('${inv.id}')"><i class="ti ti-check"></i> Mark Paid</button>` : ''}
+      ${canVoid ? `<button class="btn btn-sm" style="background:#f3f4f6;color:#6b7280;border:1px solid #d1d5db" onclick="openVoidModal('${inv.id}')"><i class="ti ti-ban"></i> Void</button>` : ''}
+      ${hasPerm('inv.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteInvoice('${inv.id}');closeModal('inv-modal')"><i class="ti ti-trash"></i> Delete</button>` : ''}
+    </div>`;
+  }
+
+  // Build document content
+  let docContent = '';
+  if (isDraft) {
+    docContent = `<div class="held-banner"><i class="ti ti-clock-pause" style="font-size:18px"></i><div><strong>Held Order — ${inv.id}</strong><br/><span style="font-size:10px">Saved ${inv.date} ${inv.time} by ${inv.cashier}</span></div></div>` + buildInvoiceHTML(inv);
+  } else if (isCashSale) {
+    docContent = buildReceiptHTML(inv);
+  } else if (isQuotation) {
+    docContent = buildQuotationHTML(inv);
+  } else {
+    docContent = buildInvoiceHTML(inv);
+  }
 
   document.getElementById('inv-modal-body').innerHTML =
-    (isQuotation ? buildQuotationHTML(inv) : buildInvoiceHTML(inv)) +
-    payHistoryHTML + convertedBanner + actionBar;
+    voidBanner + cashSaleBanner + docContent +
+    payHistoryHTML + convertedBanner + cashSaleInvoicedBanner + actionBar;
   openModal('inv-modal');
 }
 
@@ -3155,6 +3616,71 @@ async function convertQuotationToInvoice(qtId) {
   closeModal('inv-modal');
   renderInvoices();
   showInvoice(newInv.id);
+}
+
+// ── CASH SALE → INVOICE CONVERSION ───────────────────────
+async function convertCashSaleToInvoice(csId) {
+  const cs = invoices.find(i => i.id === csId);
+  if (!cs || cs.type !== 'cash_sale') return;
+  if (cs.invoiceRef) { alert('Already invoiced as ' + cs.invoiceRef); return; }
+  if (!confirm(`Generate a formal invoice for cash sale ${csId} (${cs.clientName})?\n\nRevenue stays on the cash sale — this invoice is a paper document only.`)) return;
+
+  const csPaid = invPaid(cs);
+  const newInv = {
+    ...cs,
+    id: nextInvoiceNumber(),
+    type: 'invoice',
+    payMethod: cs.payMethod,
+    status: (cs.total - csPaid) <= 0 ? 'Paid' : 'Partial',
+    cashSaleRef: csId,
+    date: dateStr(), time: timeStr(),
+    cashier: currentUser.name,
+  };
+  invoices.push(newInv);
+  await dbInsertInvoice(newInv);
+
+  cs.invoiceRef = newInv.id;
+  await dbUpdateInvoice(cs);
+
+  closeModal('inv-modal');
+  renderInvoices();
+  showInvoice(newInv.id);
+}
+
+// ── VOID INVOICE ──────────────────────────────────────────
+function openVoidModal(invId) {
+  document.getElementById('void-inv-id').value = invId;
+  document.getElementById('void-reason').value = '';
+  closeModal('inv-modal');
+  openModal('void-modal');
+}
+
+async function confirmVoidInvoice() {
+  const id = document.getElementById('void-inv-id').value;
+  const reason = document.getElementById('void-reason').value.trim();
+  if (!reason) { alert('Please enter a reason for voiding.'); return; }
+  const inv = invoices.find(i => i.id === id); if (!inv) return;
+  inv.status    = 'Voided';
+  inv.voidReason = reason;
+  inv.voidedBy  = currentUser.name;
+  inv.voidedAt  = dateStr() + ' ' + timeStr();
+  await dbUpdateInvoice(inv);
+  closeModal('void-modal');
+  renderInvoices();
+  renderDashboard();
+  showInvoice(id);
+}
+
+// ── QUOTATION STATUS UPDATE ───────────────────────────────
+async function updateQuotationStatus(qtId, newStatus) {
+  const qt = invoices.find(i => i.id === qtId);
+  if (!qt) return;
+  const labels = { sent: 'Sent', accepted: 'Accepted', declined: 'Declined', expired: 'Expired' };
+  if (!confirm(`Mark quotation ${qtId} as "${labels[newStatus] || newStatus}"?`)) return;
+  qt.status = labels[newStatus] || newStatus;
+  await dbUpdateInvoice(qt);
+  renderInvoices();
+  showInvoice(qtId);
 }
 
 // ── EDIT INVOICE / QUOTATION ─────────────────────────────
@@ -3537,26 +4063,37 @@ function renderInvoices() {
     return true; // no dept info — show it
   });
 
-  const countAll = allDocs.length;
-  const countInv = allDocs.filter(i => i.type !== 'quotation').length;
-  const countQt  = allDocs.filter(i => i.type === 'quotation').length;
+  const countAll   = allDocs.length;
+  const countInv   = allDocs.filter(i => i.type === 'invoice' && i.status !== 'draft').length;
+  const countCs    = allDocs.filter(i => i.type === 'cash_sale').length;
+  const countQt    = allDocs.filter(i => i.type === 'quotation').length;
+  const countHeld  = allDocs.filter(i => i.status === 'draft').length;
+
+  const isCsTab   = invTypeFilter === 'cash_sales';
+  const isQtTab   = invTypeFilter === 'quotations';
+  const isInvTab  = invTypeFilter === 'invoices';
+  const isHeldTab = invTypeFilter === 'held';
+  const isMixed   = invTypeFilter === 'all';
 
   let filtered = [...allDocs];
-  if (invTypeFilter === 'invoices')    filtered = filtered.filter(i => i.type !== 'quotation');
-  else if (invTypeFilter === 'quotations') filtered = filtered.filter(i => i.type === 'quotation');
-
-  const isQtTab  = invTypeFilter === 'quotations';
-  const isInvTab = invTypeFilter === 'invoices';
-  const isMixed  = invTypeFilter === 'all';
+  if (isCsTab)        filtered = filtered.filter(i => i.type === 'cash_sale');
+  else if (isQtTab)   filtered = filtered.filter(i => i.type === 'quotation');
+  else if (isInvTab)  filtered = filtered.filter(i => i.type === 'invoice' && i.status !== 'draft');
+  else if (isHeldTab) filtered = filtered.filter(i => i.status === 'draft');
 
   if (isQtTab) {
-    if (invFilter === 'pending')    filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'pending');
-    else if (invFilter === 'converted') filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'converted');
-    else if (invFilter === 'expired')   filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'expired');
-  } else {
-    if (invFilter === 'paid')    filtered = filtered.filter(i => i.type !== 'quotation' && invStatus(i) === 'Paid');
+    const sf = invFilter.toLowerCase();
+    if (sf === 'pending')    filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'pending');
+    else if (sf === 'sent')      filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'sent');
+    else if (sf === 'accepted')  filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'accepted');
+    else if (sf === 'declined')  filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'declined');
+    else if (sf === 'converted') filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'converted');
+    else if (sf === 'expired')   filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'expired');
+  } else if (!isHeldTab && !isCsTab) {
+    if (invFilter === 'paid')         filtered = filtered.filter(i => i.type !== 'quotation' && invStatus(i) === 'Paid');
     else if (invFilter === 'partial') filtered = filtered.filter(i => i.type !== 'quotation' && invStatus(i) === 'Partial');
     else if (invFilter === 'unpaid')  filtered = filtered.filter(i => i.type !== 'quotation' && invStatus(i) === 'Unpaid');
+    else if (invFilter === 'void')    filtered = filtered.filter(i => i.status === 'Voided');
   }
 
   if (invSearch) filtered = filtered.filter(i =>
@@ -3565,22 +4102,45 @@ function renderInvoices() {
     (i.clientPhone && i.clientPhone.includes(invSearch))
   );
 
+  if (invDeptFilter !== 'all') {
+    filtered = filtered.filter(i => {
+      if (Array.isArray(i.items) && i.items.length)
+        return i.items.some(it => it.dept === invDeptFilter);
+      if (Array.isArray(i.dept) && i.dept.length)
+        return i.dept.some(d => d === invDeptFilter);
+      return false;
+    });
+  }
+
   const rows = [...filtered].reverse();
-  const colspanEmpty = isQtTab ? 9 : (isMixed ? 11 : 10);
+  const colspanEmpty = isQtTab ? 9 : isHeldTab ? 8 : isCsTab ? 9 : (isMixed ? 11 : 10);
 
   // ── Status pills ──────────────────────────────────────────
   let pills = '';
   if (isQtTab) {
-    const pDefs = [{k:'all',label:'All',cls:'sp-all'},{k:'pending',label:'Pending',cls:'sp-pending'},{k:'converted',label:'Converted',cls:'sp-converted'},{k:'expired',label:'Expired',cls:'sp-expired'}];
+    const pDefs = [
+      {k:'all',label:'All',cls:'sp-all'},{k:'pending',label:'Pending',cls:'sp-pending'},
+      {k:'sent',label:'Sent',cls:'sp-sent'},{k:'accepted',label:'Accepted',cls:'sp-accepted'},
+      {k:'declined',label:'Declined',cls:'sp-declined'},{k:'converted',label:'Converted',cls:'sp-converted'},
+      {k:'expired',label:'Expired',cls:'sp-expired'}
+    ];
     pills = '<div class="status-pills"><span style="font-size:11px;color:var(--muted);margin-right:2px">Filter:</span>' + pDefs.map(p=>'<span class="status-pill '+p.cls+(invFilter===p.k?' active':'')+'" onclick="setInvFilter(\''+p.k+'\')">'+p.label+'</span>').join('') + '</div>';
-  } else {
-    const pDefs = [{k:'all',label:'All',cls:'sp-all'},{k:'paid',label:'Paid',cls:'sp-paid'},{k:'partial',label:'Partial',cls:'sp-partial'},{k:'unpaid',label:'Unpaid',cls:'sp-unpaid'}];
+  } else if (!isCsTab && !isHeldTab) {
+    const pDefs = [
+      {k:'all',label:'All',cls:'sp-all'},{k:'paid',label:'Paid',cls:'sp-paid'},
+      {k:'partial',label:'Partial',cls:'sp-partial'},{k:'unpaid',label:'Unpaid',cls:'sp-unpaid'},
+      {k:'void',label:'Voided',cls:'sp-void'}
+    ];
     pills = '<div class="status-pills"><span style="font-size:11px;color:var(--muted);margin-right:2px">Filter:</span>' + pDefs.map(p=>'<span class="status-pill '+p.cls+(invFilter===p.k?' active':'')+'" onclick="setInvFilter(\''+p.k+'\')">'+p.label+'</span>').join('') + '</div>';
   }
 
   // ── Table header ──────────────────────────────────────────
   let thead = '';
-  if (isInvTab) {
+  if (isCsTab) {
+    thead = '<tr><th>Number</th><th>Client</th><th>Phone</th><th style="text-align:right">Amount</th><th>Method</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
+  } else if (isHeldTab) {
+    thead = '<tr><th>Hold ID</th><th>Client</th><th>Phone</th><th style="text-align:right">Amount</th><th>Items</th><th>Cashier</th><th>Date</th><th></th></tr>';
+  } else if (isInvTab) {
     thead = '<tr><th>Number</th><th>Client</th><th>Phone</th><th style="text-align:right">'+totalHeader+'</th><th style="text-align:right">'+paidHeader+'</th><th style="text-align:right">'+balHeader2+'</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
   } else if (isQtTab) {
     thead = '<tr><th>Number</th><th>Client</th><th>Phone</th><th style="text-align:right">Amount</th><th>Valid Until</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
@@ -3620,7 +4180,7 @@ function renderInvoices() {
     }
 
     var stLow = dispSt.toLowerCase();
-    var stClass = stLow==='paid'?'badge-green':stLow==='partial'?'badge-amber':stLow==='converted'?'badge-green':stLow==='pending'?'badge-blue':stLow==='expired'?'badge-gray':'badge-red';
+    var stClass = stLow==='paid'?'badge-green':stLow==='partial'?'badge-amber':stLow==='converted'?'badge-green':stLow==='pending'?'badge-blue':stLow==='sent'?'badge-blue':stLow==='accepted'?'badge-green':stLow==='declined'?'badge-red':stLow==='voided'?'badge-gray':stLow==='draft'?'badge-gray':stLow==='expired'?'badge-gray':'badge-red';
 
     var validUntil = '';
     if (isQt) { try { var vd=new Date(i.date); vd.setDate(vd.getDate()+30); validUntil=vd.toLocaleDateString('en-KE',{day:'2-digit',month:'short',year:'numeric'}); } catch(e){ validUntil='—'; } }
@@ -3628,25 +4188,63 @@ function renderInvoices() {
     var linkBadge = '';
     if (isQt && i.invoiceRef) linkBadge = '<span title="Converted → '+i.invoiceRef+'" style="font-size:9px;background:#dcfce7;color:#166534;border-radius:4px;padding:1px 5px;margin-left:4px;cursor:default">→ '+i.invoiceRef+'</span>';
     else if (!isQt && i.quotationRef) { var qn=(i.quotationRef.match(/-(\d+)$/)||[])[1]||''; linkBadge='<span title="From '+i.quotationRef+'" style="font-size:9px;background:#ede9fe;color:#6d28d9;border-radius:4px;padding:1px 5px;margin-left:4px;cursor:default">QT '+qn+'</span>'; }
+    else if (i.cashSaleRef) linkBadge='<span title="From '+i.cashSaleRef+'" style="font-size:9px;background:#d1fae5;color:#065f46;border-radius:4px;padding:1px 5px;margin-left:4px;cursor:default">CS→INV</span>';
+    else if (i.invoiceRef && i.type==='cash_sale') linkBadge='<span title="Invoice: '+i.invoiceRef+'" style="font-size:9px;background:#ede9fe;color:#6d28d9;border-radius:4px;padding:1px 5px;margin-left:4px;cursor:default">→ INV</span>';
 
+    var isVoided = i.status === 'Voided';
     var actBtns = '';
-    if (isInvTab || isMixed) {
-      if (!isQt && dispBal>0 && hasPerm('inv.record_payment')) actBtns += '<button class="btn btn-sm btn-green" onclick="openPaymentModal(\''+i.id+'\')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>';
+    if (isCsTab) {
+      if (!i.invoiceRef && hasPerm('inv.create')) actBtns += '<button class="btn btn-sm btn-outline" style="margin-right:3px;font-size:10px" onclick="event.stopPropagation();convertCashSaleToInvoice(\''+i.id+'\')" title="Convert to Invoice"><i class="ti ti-file-invoice"></i></button>';
+      if (hasPerm('inv.delete')) actBtns += '<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="event.stopPropagation();deleteInvoice(\''+i.id+'\')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>';
+    } else if (isHeldTab) {
+      actBtns += '<button class="btn btn-sm btn-green" onclick="event.stopPropagation();resumeHeldOrder(\''+i.id+'\')" style="margin-right:3px" title="Resume"><i class="ti ti-player-play"></i></button>';
+      actBtns += '<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="event.stopPropagation();deleteHeldOrder(\''+i.id+'\')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>';
+    } else if (isInvTab || isMixed) {
+      if (!isQt && !isVoided && dispBal>0 && hasPerm('inv.record_payment')) actBtns += '<button class="btn btn-sm btn-green" onclick="openPaymentModal(\''+i.id+'\')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>';
+      if (!isQt && !isVoided && hasPerm('inv.delete')) actBtns += '<button class="btn btn-sm btn-outline" style="margin-right:3px;padding:3px 7px;color:#6b7280;border-color:#d1d5db" onclick="'+(isMixed?'event.stopPropagation();':'')+'openVoidModal(\''+i.id+'\')" title="Void Invoice"><i class="ti ti-ban" style="font-size:11px"></i></button>';
       if (isQt && (i.status||'').toLowerCase()==='pending' && hasPerm('inv.create')) actBtns += '<button class="btn btn-sm btn-green" style="margin-right:3px;font-size:10px" onclick="event.stopPropagation();convertQuotationToInvoice(\''+i.id+'\')" title="Convert to Invoice"><i class="ti ti-file-invoice"></i></button>';
       if (hasPerm('inv.delete')) actBtns += '<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="'+(isMixed?'event.stopPropagation();':'')+'deleteInvoice(\''+i.id+'\')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>';
     } else {
-      if (dispBal>0 && hasPerm('inv.record_payment')) actBtns += '<button class="btn btn-sm btn-green" onclick="openPaymentModal(\''+i.id+'\')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>';
+      if (!isVoided && dispBal>0 && hasPerm('inv.record_payment')) actBtns += '<button class="btn btn-sm btn-green" onclick="openPaymentModal(\''+i.id+'\')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>';
+      if (!isVoided && hasPerm('inv.delete')) actBtns += '<button class="btn btn-sm btn-outline" style="margin-right:3px;padding:3px 7px;color:#6b7280;border-color:#d1d5db" onclick="openVoidModal(\''+i.id+'\')" title="Void Invoice"><i class="ti ti-ban" style="font-size:11px"></i></button>';
       if (hasPerm('inv.delete')) actBtns += '<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="deleteInvoice(\''+i.id+'\')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>';
     }
 
-    if (isInvTab) {
-      return '<tr style="cursor:pointer" onclick="openInvoice(\''+i.id+'\')">'
+    var rowStyle = isVoided ? 'cursor:pointer;opacity:0.55' : 'cursor:pointer';
+
+    if (isCsTab) {
+      var methodLabel = (i.payMethod||'cash').charAt(0).toUpperCase()+(i.payMethod||'cash').slice(1);
+      return '<tr style="'+rowStyle+'" onclick="openInvoice(\''+i.id+'\')">'
+        +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+linkBadge+'</td>'
+        +'<td style="font-weight:500">'+(i.clientName||'Walk-in')+'</td>'
+        +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
+        +'<td style="text-align:right;font-weight:600">'+fmt(i.total)+'</td>'
+        +'<td style="font-size:11px;color:var(--muted)">'+methodLabel+'</td>'
+        +'<td><span class="badge badge-teal">Paid</span></td>'
+        +'<td style="font-size:10px;color:var(--muted)">'+(deptNames||'—')+'</td>'
+        +'<td style="color:var(--muted);font-size:11px">'+i.date+'</td>'
+        +'<td onclick="event.stopPropagation()" style="white-space:nowrap">'+actBtns+'</td>'
+        +'</tr>';
+    } else if (isHeldTab) {
+      var itemCount = Array.isArray(i.items) ? i.items.length : 0;
+      return '<tr style="cursor:pointer" onclick="resumeHeldOrder(\''+i.id+'\')">'
+        +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+'</td>'
+        +'<td style="font-weight:500">'+(i.clientName||'Walk-in')+'</td>'
+        +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
+        +'<td style="text-align:right;font-weight:600">'+fmt(i.total)+'</td>'
+        +'<td style="font-size:11px;color:var(--muted)">'+itemCount+' item'+(itemCount!==1?'s':'')+'</td>'
+        +'<td style="font-size:11px;color:var(--muted)">'+(i.cashier||'—')+'</td>'
+        +'<td style="color:var(--muted);font-size:11px">'+i.date+'</td>'
+        +'<td onclick="event.stopPropagation()" style="white-space:nowrap">'+actBtns+'</td>'
+        +'</tr>';
+    } else if (isInvTab) {
+      return '<tr style="'+rowStyle+'" onclick="openInvoice(\''+i.id+'\')">'
         +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+linkBadge+'</td>'
         +'<td style="font-weight:500">'+i.clientName+'</td>'
         +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
         +'<td style="text-align:right;font-weight:600">'+fmt(dispTotal)+'</td>'
         +'<td style="text-align:right;color:var(--green);font-weight:500">'+fmt(dispPaid)+'</td>'
-        +'<td style="text-align:right;color:'+(dispBal>0?'#dc2626':'var(--green)')+';font-weight:'+(dispBal>0?'600':'400')+'">'+fmt(dispBal)+'</td>'
+        +'<td style="text-align:right">'+(dispBal>0?'<span style="color:#dc2626;font-weight:700;background:#fff5f5;border:1px solid #fca5a5;border-radius:4px;padding:1px 6px;font-size:11px">'+fmt(dispBal)+'</span>':'<span style="color:var(--green);font-size:11px">'+fmt(dispBal)+'</span>')+'</td>'
         +'<td><span class="badge '+stClass+'">'+dispSt+'</span></td>'
         +'<td style="font-size:10px;color:var(--muted)">'+(deptNames||'—')+'</td>'
         +'<td style="color:var(--muted);font-size:11px">'+i.date+'</td>'
@@ -3665,14 +4263,16 @@ function renderInvoices() {
         +'<td onclick="event.stopPropagation()" style="white-space:nowrap">'+actBtns+'</td>'
         +'</tr>';
     } else {
-      return '<tr style="cursor:pointer" onclick="openInvoice(\''+i.id+'\')">'
+      var typeLabel = i.type==='cash_sale'?'Cash Sale':isQt?'Quote':'Invoice';
+      var typeCls   = i.type==='cash_sale'?'badge-teal':isQt?'badge-amber':'badge-blue';
+      return '<tr style="'+rowStyle+'" onclick="openInvoice(\''+i.id+'\')">'
         +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+linkBadge+'</td>'
-        +'<td><span class="badge '+(isQt?'badge-amber':'badge-blue')+'" style="font-size:10px">'+(isQt?'Quote':'Invoice')+'</span></td>'
+        +'<td><span class="badge '+typeCls+'" style="font-size:10px">'+typeLabel+'</span></td>'
         +'<td style="font-weight:500">'+i.clientName+'</td>'
         +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
         +'<td style="text-align:right;font-weight:600">'+fmt(dispTotal)+'</td>'
         +'<td style="text-align:right;color:var(--green);font-weight:500">'+(isQt?'—':fmt(dispPaid))+'</td>'
-        +'<td style="text-align:right;color:'+((!isQt&&dispBal>0)?'#dc2626':'var(--green)')+';font-weight:'+((!isQt&&dispBal>0)?'600':'400')+'">'+(isQt?'—':fmt(dispBal))+'</td>'
+        +'<td style="text-align:right">'+(isQt?'—':(dispBal>0?'<span style="color:#dc2626;font-weight:700;background:#fff5f5;border:1px solid #fca5a5;border-radius:4px;padding:1px 6px;font-size:11px">'+fmt(dispBal)+'</span>':'<span style="color:var(--green);font-size:11px">'+fmt(dispBal)+'</span>'))+'</td>'
         +'<td><span class="badge '+stClass+'">'+dispSt.charAt(0).toUpperCase()+dispSt.slice(1)+'</span></td>'
         +'<td style="font-size:10px;color:var(--muted)">'+(deptNames||'—')+'</td>'
         +'<td style="color:var(--muted);font-size:11px">'+i.date+'</td>'
@@ -3681,7 +4281,7 @@ function renderInvoices() {
     }
   }
 
-  var tabCls = function(t){ return 'doc-tab'+(invTypeFilter===t?(t==='invoices'?' active-inv':t==='quotations'?' active-qt':' active-all'):''); };
+  var tabCls = function(t){ return 'doc-tab'+(invTypeFilter===t?(t==='invoices'?' active-inv':t==='quotations'?' active-qt':t==='cash_sales'?' active-all':t==='held'?' active-all':' active-all'):''); };
 
   // Dept badge for restricted users
   var invDeptBadge = '';
@@ -3694,27 +4294,40 @@ function renderInvoices() {
       +'</div>';
   }
 
-  var footerTotal = rows.filter(function(i){return i.type!=='quotation';}).reduce(function(s,i){
+  var footerTotal = rows.filter(function(i){
+    return i.type!=='quotation' && i.status!=='draft' && i.status!=='Voided' && !i.cashSaleRef;
+  }).reduce(function(s,i){
     return s + (invRestricted ? invDeptShare(i, allowedInvSet).billed : i.total);
   }, 0);
 
+  var emptyLabel = isQtTab?'quotations':isCsTab?'cash sales':isHeldTab?'held orders':isInvTab?'invoices':'documents';
+  var emptyIcon  = isQtTab?'📋':isCsTab?'💵':isHeldTab?'⏸️':'🧾';
   var bodyRows = '';
   if (!rows.length) {
-    bodyRows = '<tr><td colspan="'+colspanEmpty+'" style="color:var(--muted);text-align:center;padding:24px"><div style="font-size:28px;margin-bottom:6px">'+(isQtTab?'📋':'🧾')+'</div>No '+(isQtTab?'quotations':isInvTab?'invoices':'documents')+' found'+(invSearch?' matching "'+invSearch+'"':'')+'</td></tr>';
+    bodyRows = '<tr><td colspan="'+colspanEmpty+'" style="color:var(--muted);text-align:center;padding:24px"><div style="font-size:28px;margin-bottom:6px">'+emptyIcon+'</div>No '+emptyLabel+' found'+(invSearch?' matching "'+invSearch+'"':'')+'</td></tr>';
   } else {
     bodyRows = rows.map(buildRow).join('');
   }
 
-  var footerHtml = rows.length ? '<div style="padding:8px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);display:flex;justify-content:space-between"><span>'+rows.length+' record'+(rows.length!==1?'s':'')+' shown</span><span>'+(isInvTab||isMixed?'Total billed: <strong>'+fmt(footerTotal)+'</strong>':'')+'</span></div>' : '';
+  var showFooterTotal = (isInvTab || isMixed || isCsTab) && !isHeldTab;
+  var footerHtml = rows.length ? '<div style="padding:8px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);display:flex;justify-content:space-between"><span>'+rows.length+' record'+(rows.length!==1?'s':'')+' shown</span><span>'+(showFooterTotal?'Total: <strong>'+fmt(footerTotal)+'</strong>':'')+'</span></div>' : '';
 
   document.getElementById('page-invoices').innerHTML = invDeptBadge
     + '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:0">'
     + '<div class="doc-tabs" style="flex:1;min-width:0">'
     + '<div class="'+tabCls('invoices')+'" onclick="setInvTypeFilter(\'invoices\')"><i class="ti ti-file-invoice"></i> Invoices <span class="tab-count">'+countInv+'</span></div>'
+    + '<div class="'+tabCls('cash_sales')+'" onclick="setInvTypeFilter(\'cash_sales\')"><i class="ti ti-receipt"></i> Cash Sales <span class="tab-count">'+countCs+'</span></div>'
     + '<div class="'+tabCls('quotations')+'" onclick="setInvTypeFilter(\'quotations\')"><i class="ti ti-file-text"></i> Quotations <span class="tab-count">'+countQt+'</span></div>'
+    + (countHeld ? '<div class="'+tabCls('held')+'" onclick="setInvTypeFilter(\'held\')"><i class="ti ti-clock-pause"></i> Held <span class="tab-count">'+countHeld+'</span></div>' : '')
     + '<div class="'+tabCls('all')+'" onclick="setInvTypeFilter(\'all\')"><i class="ti ti-list"></i> All <span class="tab-count">'+countAll+'</span></div>'
     + '</div>'
-    + '<div class="search-bar" style="width:220px;margin:0 0 14px 0"><i class="ti ti-search"></i><input placeholder="Search name, ID, phone\u2026" value="'+invSearch+'" oninput="invSearch=this.value;renderInvoices()"/></div>'
+    + '<div style="display:flex;align-items:center;gap:6px;margin:0 0 14px 0;flex-wrap:wrap">'
+    + '<select style="height:32px;padding:0 8px;border:1px solid var(--border);border-radius:7px;font-size:11px;background:#fff;color:var(--text);cursor:pointer;min-width:130px" onchange="invDeptFilter=this.value;renderInvoices()">'
+    + '<option value="all"'+(invDeptFilter==='all'?' selected':'')+'>All Departments</option>'
+    + userInvDepts.map(function(d){return '<option value="'+d.id+'"'+(invDeptFilter===d.id?' selected':'')+'>'+d.name+'</option>';}).join('')
+    + '</select>'
+    + '<div class="search-bar" style="width:210px;margin:0"><i class="ti ti-search"></i><input placeholder="Search name, ID, phone\u2026" value="'+invSearch+'" oninput="invSearch=this.value;renderInvoices()"/></div>'
+    + '</div>'
     + '</div>'
     + pills
     + '<div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto"><table class="table" style="width:100%;min-width:700px"><thead>'+thead+'</thead><tbody>'+bodyRows+'</tbody></table></div>'
@@ -3722,7 +4335,7 @@ function renderInvoices() {
     + '</div>';
 }
 function setInvFilter(f) { invFilter = f; renderInvoices(); }
-function setInvTypeFilter(f) { invTypeFilter = f; invFilter = 'all'; renderInvoices(); }
+function setInvTypeFilter(f) { invTypeFilter = f; invFilter = 'all'; invDeptFilter = 'all'; renderInvoices(); }
 
 // ── CLIENTS ──────────────────────────────────────────────
 function renderClients() {
@@ -3764,7 +4377,7 @@ function renderClients() {
             <tbody>
               ${list.map(c => {
                 const initials = c.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-                const cInvs = invoices.filter(i => i.type !== 'quotation' && (i.clientPhone === c.phone || i.clientId === c.id));
+                const cInvs = revenueInvoices().filter(i => i.clientPhone === c.phone || i.clientId === c.id);
                 const total = cInvs.reduce((a, i) => a + i.total, 0);
                 const balance = cInvs.reduce((a, i) => a + invBalance(i), 0);
                 const bdStr = c.birthday ? new Date(c.birthday + 'T00:00:00').toLocaleDateString('en-KE', {day:'2-digit',month:'short'}) : '—';
@@ -4002,7 +4615,7 @@ function renderExpenses() {
     const deptRevMap = {};
     const deptExpMap = {};
     userDepts.forEach(d => { deptRevMap[d.id] = 0; deptExpMap[d.id] = 0; });
-    invoices.filter(i => i.type !== 'quotation').forEach(inv => {
+    revenueInvoices().forEach(inv => {
       inv.items.forEach(item => {
         if (deptRevMap[item.dept] !== undefined) deptRevMap[item.dept] += item.price * item.qty;
       });
@@ -4267,7 +4880,7 @@ let bdayWindowDays = 7;
 let bdayCustomFrom = '', bdayCustomTo = '';
 
 function renderAnalytics() {
-  const filtered = filterByPeriod(invoices.filter(i => i.type !== 'quotation'));
+  const filtered = filterByPeriod(revenueInvoices());
   const total    = filtered.reduce((a, i) => a + i.total, 0);
   const unpaid   = filtered.filter(i => invStatus(i) === 'Unpaid').reduce((a, i) => a + invBalance(i), 0);
   const partial  = filtered.filter(i => invStatus(i) === 'Partial').reduce((a, i) => a + invBalance(i), 0);
@@ -4672,7 +5285,7 @@ function renderAnalytics() {
                 const bdObj = new Date(c.birthday + 'T00:00:00');
                 const bdStr = bdObj.toLocaleDateString('en-KE', { day:'2-digit', month:'short', year:'numeric' });
                 const age   = new Date().getFullYear() - bdObj.getFullYear();
-                const cInvs = invoices.filter(i => i.type !== 'quotation' && (i.clientPhone === c.phone || i.clientId === c.id));
+                const cInvs = revenueInvoices().filter(i => i.clientPhone === c.phone || i.clientId === c.id);
                 const cTotal = cInvs.reduce((a,i) => a+i.total, 0);
                 const tagColor = c.daysUntil === 0 ? '#ec4899' : c.daysUntil <= 3 ? '#f59e0b' : 'var(--muted)';
                 return `<tr>
@@ -4775,7 +5388,7 @@ function getFilteredBirthdays() {
 }
 
 function exportReportCSV() {
-  const filtered = filterByPeriod(invoices.filter(i => i.type !== 'quotation'));
+  const filtered = filterByPeriod(revenueInvoices());
   const rows = [['Invoice #','Date','Client','Phone','Departments','Items','Total (KSh)','Paid (KSh)','Balance (KSh)','Status','Payment Method']];
   filtered.forEach(inv => {
     const depts = [...new Set(inv.items.map(i => DEPTS.find(d=>d.id===i.dept)?.name||i.dept))].join('; ');
@@ -4808,7 +5421,7 @@ function exportReportCSV() {
 
 function exportReportXLSX() {
   if (typeof XLSX === 'undefined') { alert('Excel library not loaded. Please check your connection.'); return; }
-  const filtered = filterByPeriod(invoices.filter(i => i.type !== 'quotation'));
+  const filtered = filterByPeriod(revenueInvoices());
   const wb = XLSX.utils.book_new();
 
   // Sheet 1 — Invoice list
@@ -4880,7 +5493,7 @@ function exportReportXLSX() {
 
 function exportReportPDF() {
   const pLabel = periodFrom || periodTo ? `${periodFrom||'start'} to ${periodTo||'now'}` : 'All Time';
-  const filtered = filterByPeriod(invoices.filter(i => i.type !== 'quotation'));
+  const filtered = filterByPeriod(revenueInvoices());
   const total    = filtered.reduce((a,i)=>a+i.total,0);
   const collected= total - filtered.filter(i=>invStatus(i)==='Unpaid').reduce((a,i)=>a+invBalance(i),0)
                          - filtered.filter(i=>invStatus(i)==='Partial').reduce((a,i)=>a+invBalance(i),0);
