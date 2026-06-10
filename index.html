@@ -723,6 +723,8 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
 'use strict';
 
 const fmt = n => 'KSh ' + Math.round(n).toLocaleString();
+const PM_LABELS = { cash: 'Cash', mpesa: 'M-Pesa', bank: 'Bank', credit: 'Credit', quotation: 'Quotation', split: 'Split' };
+const fmtPayMethod = pm => pm ? pm.split('+').map(m => PM_LABELS[m.toLowerCase()] || (m.charAt(0).toUpperCase() + m.slice(1))).join(' + ') : '—';
 const now = () => new Date();
 const dateStr = d => (d || now()).toLocaleDateString('en-KE', {day:'2-digit', month:'short', year:'numeric'});
 const timeStr = d => (d || now()).toLocaleTimeString('en-KE', {hour:'2-digit', minute:'2-digit'});
@@ -1697,7 +1699,7 @@ async function persistShopSettings() {
 }
 
 // State
-let cart = [], payMethod = 'cash', invoices = [], clients = [], payments = [], expenses = [];
+let cart = [], payMethod = 'cash', splitPayRows = [], invoices = [], clients = [], payments = [], expenses = [];
 let activeDept = 'all', invFilter = 'all', invTypeFilter = 'all', invSearch = '', invDeptFilter = 'all', clientSearch = '';
 let activePeriod = 'all', mpesaPhone = '', mpesaMode = 'stk';
 let periodFrom = '', periodTo = '';
@@ -2177,7 +2179,7 @@ function renderDashboard() {
       </div>
       <div style="flex:1;min-width:0">
         <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">
-          <span style="font-weight:600;text-transform:capitalize">${m}</span>
+          <span style="font-weight:600">${fmtPayMethod(m)}</span>
           <span style="font-weight:700">${fmt(payByMethod[m])}</span>
         </div>
         <div style="height:4px;background:#f1f5f9;border-radius:4px;overflow:hidden">
@@ -2490,6 +2492,7 @@ function startNewSale() {
   if (cart.length && !confirm('Clear the current cart and start a fresh sale? Any unsaved items will be discarded.')) return;
   cart = [];
   payMethod = 'cash';
+  splitPayRows = [];
   mpesaPhone = '';
   mpesaMode  = 'stk';
   if (typeof window !== 'undefined') window._pendingInv = null;
@@ -2501,6 +2504,7 @@ function renderPOS() {
   // Reset transient sale state so the previous sale's selections can't leak
   // into a brand-new sale (payment method, m-pesa phone, pending m-pesa invoice).
   payMethod = 'cash';
+  splitPayRows = [];
   mpesaPhone = '';
   mpesaMode  = 'stk';
   if (typeof window !== 'undefined') window._pendingInv = null;
@@ -2561,7 +2565,7 @@ function renderPOS() {
 
           <div class="cf-total"><span>Total</span><span id="cf-total" style="color:var(--red)">KSh 0</span></div>
           <div id="cf-balance-row" style="display:none;justify-content:space-between;font-size:11px;font-weight:600;color:#dc2626;padding:2px 0 6px"><span>Balance Due</span><span id="cf-balance">KSh 0</span></div>
-          <div style="margin-bottom:8px">
+          <div id="single-paid-row" style="margin-bottom:8px">
             <label style="font-size:10px;color:var(--muted);margin-bottom:3px;display:block">Amount Paid (KSh) <span style="font-weight:400">(blank = full payment)</span></label>
             <input type="number" id="cart-paid" placeholder="Leave blank for full payment" min="0" step="0.01" style="padding:6px 8px;border-radius:5px;font-size:12px;width:100%" oninput="updateCartPaidDisplay()"/>
           </div>
@@ -2570,6 +2574,13 @@ function renderPOS() {
             <button class="pay-btn"        id="pm-mpesa"  onclick="selPM('mpesa')"> <i class="ti ti-device-mobile"></i> M-Pesa</button>
             <button class="pay-btn"        id="pm-bank"   onclick="selPM('bank')">  <i class="ti ti-building-bank"></i> Bank</button>
             <button class="pay-btn"        id="pm-credit" onclick="selPM('credit')"><i class="ti ti-clock"></i> Credit</button>
+            <button class="pay-btn"        id="pm-split"  onclick="selPM('split')" style="grid-column:1/-1"><i class="ti ti-arrows-split-2"></i> Split Payment</button>
+          </div>
+          <div id="split-payment-panel" style="display:none;margin-bottom:8px">
+            <div style="font-size:10px;font-weight:600;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px">Split Payment Methods</div>
+            <div id="split-rows-container"></div>
+            <button onclick="addSplitRow()" style="width:100%;background:none;border:1px dashed var(--border);border-radius:5px;padding:5px;font-size:11px;color:var(--muted);cursor:pointer;margin-bottom:6px">+ Add another method</button>
+            <div id="split-total-display"></div>
           </div>
           <div id="mpesa-phone-row" style="display:none;margin-bottom:8px">
             <div class="mpesa-box">
@@ -2752,18 +2763,27 @@ function recalc() {
   const s = document.getElementById('cf-sub'); if (s) s.textContent = fmt(sub);
   const ds = document.getElementById('cf-disc'); if (ds) ds.textContent = '- ' + fmt(da);
   const t = document.getElementById('cf-total'); if (t) t.textContent = fmt(total);
+  if (payMethod === 'split') updateSplitTotal(total);
   return { sub, da, vatRate, vatAmt, total, disc };
 }
 
 function selPM(pm) {
   payMethod = pm;
   if (pm !== 'mpesa') { mpesaMode = 'stk'; }
-  ['cash','mpesa','bank','credit'].forEach(p => {
+  ['cash','mpesa','bank','credit','split'].forEach(p => {
     const b = document.getElementById('pm-' + p); if (b) b.classList.toggle('active', p === pm);
   });
   const row = document.getElementById('mpesa-phone-row');
   if (row) row.style.display = pm === 'mpesa' ? 'block' : 'none';
   if (pm === 'mpesa') setMpesaMode(mpesaMode);
+  const splitPanel   = document.getElementById('split-payment-panel');
+  const singlePaidRow = document.getElementById('single-paid-row');
+  if (splitPanel)    splitPanel.style.display    = pm === 'split' ? 'block' : 'none';
+  if (singlePaidRow) singlePaidRow.style.display = pm === 'split' ? 'none'  : 'block';
+  if (pm === 'split') {
+    if (!splitPayRows.length) { const { total } = recalc(); splitPayRows = [{ id: uid(), method: 'cash', amount: total }]; }
+    renderSplitRows();
+  }
 }
 function setMpesaMode(mode) {
   mpesaMode = mode;
@@ -2775,6 +2795,62 @@ function setMpesaMode(mode) {
   if (btnDir) btnDir.classList.toggle('active', mode === 'direct');
   if (phoneRow)   phoneRow.style.display   = mode === 'stk'    ? 'block' : 'none';
   if (directNote) directNote.style.display = mode === 'direct' ? 'block' : 'none';
+}
+
+// ── SPLIT PAYMENT HELPERS ─────────────────────────────────
+function addSplitRow() {
+  splitPayRows.push({ id: uid(), method: 'mpesa', amount: 0 });
+  renderSplitRows();
+}
+function removeSplitRow(rowId) {
+  if (splitPayRows.length <= 1) return;
+  splitPayRows = splitPayRows.filter(r => r.id !== rowId);
+  renderSplitRows();
+}
+function updateSplitRowField(rowId, field, val) {
+  const r = splitPayRows.find(x => x.id === rowId); if (!r) return;
+  r[field] = field === 'amount' ? (parseFloat(val) || 0) : val;
+  updateSplitTotal();
+}
+function renderSplitRows() {
+  const c = document.getElementById('split-rows-container'); if (!c) return;
+  c.innerHTML = splitPayRows.map(r => `
+    <div style="display:flex;gap:5px;align-items:center;margin-bottom:5px">
+      <select style="flex:0 0 88px;font-size:11px;padding:5px 3px;border:1px solid var(--border);border-radius:5px;background:#fff"
+        onchange="updateSplitRowField('${r.id}','method',this.value)">
+        <option value="cash"  ${r.method==='cash' ?'selected':''}>Cash</option>
+        <option value="mpesa" ${r.method==='mpesa'?'selected':''}>M-Pesa</option>
+        <option value="bank"  ${r.method==='bank' ?'selected':''}>Bank</option>
+      </select>
+      <input type="number" value="${r.amount > 0 ? r.amount : ''}" placeholder="Amount" min="0" step="0.01"
+        style="flex:1;padding:5px;border:1px solid var(--border);border-radius:5px;font-size:12px"
+        oninput="updateSplitRowField('${r.id}','amount',this.value)"/>
+      ${splitPayRows.length > 1
+        ? `<button onclick="removeSplitRow('${r.id}')" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:18px;line-height:1;padding:1px 4px">×</button>`
+        : '<span style="width:20px"></span>'}
+    </div>`).join('');
+  updateSplitTotal(); // no arg — will compute total inline safely
+}
+function updateSplitTotal(precomputedTotal) {
+  // Accept a pre-computed total to avoid circular call when invoked from recalc()
+  const total = (precomputedTotal !== undefined) ? precomputedTotal : (() => {
+    const sub = cart.reduce((a, c) => a + c.price * c.qty, 0);
+    const disc = Math.min(parseFloat(document.getElementById('disc-pct')?.value) || 0, 100);
+    return sub - sub * disc / 100;
+  })();
+  const allocated = splitPayRows.reduce((s, r) => s + (r.amount || 0), 0);
+  const remaining = total - allocated;
+  const el = document.getElementById('split-total-display'); if (!el) return;
+  const col = allocated >= total - 0.005 ? '#16a34a' : allocated > 0 ? '#d97706' : '#dc2626';
+  el.innerHTML = `<div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:11px">
+    <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+      <span style="color:var(--muted)">Allocated</span>
+      <span style="font-weight:700;color:${col}">${fmt(allocated)}</span>
+    </div>
+    ${remaining > 0.005  ? `<div style="display:flex;justify-content:space-between;color:#dc2626;font-weight:600"><span>Still needed</span><span>${fmt(remaining)}</span></div>` : ''}
+    ${remaining < -0.005 ? `<div style="color:#dc2626;font-size:10px;text-align:center;margin-top:2px">⚠ Over by ${fmt(-remaining)}</div>` : ''}
+    ${Math.abs(remaining) <= 0.005 ? `<div style="color:#16a34a;font-size:10px;text-align:center;font-weight:700;margin-top:2px">✓ Fully covered</div>` : ''}
+  </div>`;
 }
 
 function onClientSelect(id) {
@@ -2818,9 +2894,23 @@ async function checkout() {
     }
   }
 
-  const cartPaidAmt = parseFloat(document.getElementById('cart-paid')?.value) || 0;
-  const amountPaid = (cartPaidAmt > 0 && cartPaidAmt < total) ? cartPaidAmt : total;
-  const isPartial = amountPaid < total;
+  // Resolve payment entries and effective method (supports split payment)
+  let payEntries = [], amountPaid = 0, isPartial = false, effectivePM = payMethod;
+  if (payMethod === 'split') {
+    payEntries = splitPayRows.filter(r => r.amount > 0);
+    if (!payEntries.length) { alert('Add at least one payment amount in Split Payment.'); return; }
+    amountPaid = payEntries.reduce((s, r) => s + r.amount, 0);
+    if (amountPaid <= 0) { alert('Split payment total must be greater than zero.'); return; }
+    isPartial = amountPaid < total - 0.005;
+    const methods = [...new Set(payEntries.map(r => r.method))];
+    effectivePM = methods.length > 1 ? methods.join('+') : methods[0];
+  } else {
+    const cartPaidAmt = parseFloat(document.getElementById('cart-paid')?.value) || 0;
+    amountPaid = (cartPaidAmt > 0 && cartPaidAmt < total) ? cartPaidAmt : total;
+    isPartial  = amountPaid < total;
+    effectivePM = payMethod;
+    payEntries = [{ method: payMethod, amount: amountPaid }];
+  }
 
   const inv = {
     id: nextInvoiceNumber(),
@@ -2829,7 +2919,7 @@ async function checkout() {
     clientWhatsApp: clientWA || '', clientId: clientSel || null,
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
     vatRate, vatAmt,
-    total, payMethod, status: payMethod === 'credit' ? 'Unpaid' : (isPartial ? 'Partial' : 'Paid'),
+    total, payMethod: effectivePM, status: payMethod === 'credit' ? 'Unpaid' : (isPartial ? 'Partial' : 'Paid'),
     date: saleDate(), time: saleTime(), eventDate: eventDate || saleDate(),
     cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
     sendEmail, sendWhatsApp,
@@ -2837,9 +2927,14 @@ async function checkout() {
 
   // Auto-record initial payment for non-credit sales
   if (payMethod !== 'credit') {
-    const p = { id: uid(), invoiceId: inv.id, amount: amountPaid, method: payMethod, note: isPartial ? 'Partial payment' : 'Initial payment', paidAt: saleDate() + ' ' + saleTime() };
-    payments.push(p);
-    await dbInsertPayment(p);
+    const isSplitPay = payEntries.length > 1;
+    for (const pe of payEntries) {
+      const p = { id: uid(), invoiceId: inv.id, amount: pe.amount, method: pe.method,
+        note: isSplitPay ? 'Split payment' : (isPartial ? 'Partial payment' : 'Initial payment'),
+        paidAt: saleDate() + ' ' + saleTime() };
+      payments.push(p);
+      await dbInsertPayment(p);
+    }
   }
 
   if (payMethod === 'mpesa' && mpesaMode === 'stk') {
@@ -3013,9 +3108,23 @@ async function checkoutAsCashSale() {
     if (!phone) { alert('Please enter an M-Pesa phone number for STK Push.'); return; }
   }
 
-  const cartPaidAmt = parseFloat(document.getElementById('cart-paid')?.value) || 0;
-  const amountPaid  = (cartPaidAmt > 0 && cartPaidAmt < total) ? cartPaidAmt : total;
-  const isPartial   = amountPaid < total;
+  // Resolve payment entries and effective method (supports split payment)
+  let payEntries = [], amountPaid = 0, isPartial = false, effectivePM = payMethod;
+  if (payMethod === 'split') {
+    payEntries = splitPayRows.filter(r => r.amount > 0);
+    if (!payEntries.length) { alert('Add at least one payment amount in Split Payment.'); return; }
+    amountPaid = payEntries.reduce((s, r) => s + r.amount, 0);
+    if (amountPaid <= 0) { alert('Split payment total must be greater than zero.'); return; }
+    isPartial = amountPaid < total - 0.005;
+    const methods = [...new Set(payEntries.map(r => r.method))];
+    effectivePM = methods.length > 1 ? methods.join('+') : methods[0];
+  } else {
+    const cartPaidAmt = parseFloat(document.getElementById('cart-paid')?.value) || 0;
+    amountPaid = (cartPaidAmt > 0 && cartPaidAmt < total) ? cartPaidAmt : total;
+    isPartial  = amountPaid < total;
+    effectivePM = payMethod;
+    payEntries = [{ method: payMethod, amount: amountPaid }];
+  }
 
   const cs = {
     id: nextCashSaleNumber(),
@@ -3024,14 +3133,19 @@ async function checkoutAsCashSale() {
     clientWhatsApp: clientWA || '', clientId: clientSel || null,
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
     vatRate, vatAmt, total,
-    payMethod, status: isPartial ? 'Partial' : 'Paid',
+    payMethod: effectivePM, status: isPartial ? 'Partial' : 'Paid',
     date: saleDate(), time: saleTime(), eventDate: eventDate || saleDate(),
     cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
   };
 
-  const p = { id: uid(), invoiceId: cs.id, amount: amountPaid, method: payMethod, note: isPartial ? 'Partial payment' : 'Cash sale payment', paidAt: saleDate() + ' ' + saleTime() };
-  payments.push(p);
-  await dbInsertPayment(p);
+  const isSplitPay = payEntries.length > 1;
+  for (const pe of payEntries) {
+    const p = { id: uid(), invoiceId: cs.id, amount: pe.amount, method: pe.method,
+      note: isSplitPay ? 'Split payment' : (isPartial ? 'Partial payment' : 'Cash sale payment'),
+      paidAt: saleDate() + ' ' + saleTime() };
+    payments.push(p);
+    await dbInsertPayment(p);
+  }
 
   if (payMethod === 'mpesa' && mpesaMode === 'stk') {
     showMpesaSTK(cs, mpesaPhone || clientPhone);
@@ -3177,6 +3291,10 @@ function buildInvoiceHTML(inv) {
 
   const amountDue = Math.max(balance, 0);
   const statusColor = inv.status === 'Paid' ? '#16a34a' : inv.status === 'Partial' ? '#d97706' : '#dc2626';
+  const invPmtsList = invPayments(inv.cashSaleRef || inv.id);
+  const paymentDisplay = invPmtsList.length > 1
+    ? invPmtsList.map(p => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${fmtPayMethod(p.method)}</span><span>${fmt(p.amount)}</span></div>`).join('')
+    : fmtPayMethod(inv.payMethod);
 
   return `<div class="inv-wrap">
     <div class="inv-header">
@@ -3208,7 +3326,7 @@ function buildInvoiceHTML(inv) {
         <div class="inv-meta-row"><span class="inv-meta-lbl">Invoice No.</span><span class="inv-meta-val">${inv.id}</span></div>
         <div class="inv-meta-row"><span class="inv-meta-lbl">Date</span><span class="inv-meta-val">${inv.date}</span></div>
         <div class="inv-meta-row"><span class="inv-meta-lbl">Event Date</span><span class="inv-meta-val">${inv.eventDate || '—'}</span></div>
-        <div class="inv-meta-row"><span class="inv-meta-lbl">Payment</span><span class="inv-meta-val" style="text-transform:capitalize">${inv.payMethod}</span></div>
+        <div class="inv-meta-row"><span class="inv-meta-lbl">Payment</span><span class="inv-meta-val">${paymentDisplay}</span></div>
         <div class="inv-meta-row"><span class="inv-meta-lbl">Status</span><span class="inv-meta-val" style="color:${statusColor}">${inv.status}</span></div>
       </div>
     </div>
@@ -3253,7 +3371,7 @@ function buildInvoiceHTML(inv) {
     ${pays.length ? `<div class="inv-payments">
       <div class="inv-payments-hd">Payments Received</div>
       ${pays.map(p => `<div class="inv-pay-row">
-        <span>${p.paidAt} &mdash; ${p.method}${p.note ? ' (' + p.note + ')' : ''}</span>
+        <span>${p.paidAt} &mdash; ${fmtPayMethod(p.method)}${p.note ? ' (' + p.note + ')' : ''}</span>
         <span>${fmt(p.amount)}</span>
       </div>`).join('')}
       <div class="inv-pay-row" style="border-top:1px solid #bbf7d0;padding-top:6px;margin-top:4px;font-weight:600">
@@ -3460,7 +3578,10 @@ function buildReceiptHTML(inv) {
     </div>
     <div class="receipt-footer">
       <div class="receipt-footer-line"><strong>Payment Method</strong></div>
-      <div class="receipt-footer-line" style="text-transform:uppercase;font-weight:700;font-size:11px">${inv.payMethod}</div>
+      ${pays.length > 1
+        ? pays.map(p => `<div class="receipt-footer-line" style="font-weight:700;font-size:11px;display:flex;justify-content:space-between">${fmtPayMethod(p.method)}<span>${fmt(p.amount)}</span></div>`).join('')
+        : `<div class="receipt-footer-line" style="font-weight:700;font-size:11px">${fmtPayMethod(inv.payMethod)}</div>`
+      }
       ${S.paymentInstructions ? `<div style="margin-top:10px;font-size:9px;line-height:1.9">${S.paymentInstructions.split('\n').filter(Boolean).map(l=>l.trim()).join('<br/>')}${S.email?'<br/>📧 '+S.email:''}${S.bizPhone1?'<br/>📞 '+S.bizPhone1:''}</div>` : ''}
       <div style="margin-top:10px;font-size:9px;color:var(--muted)">${S.invoiceFootnote || 'We Deliver Quality.'}</div>
     </div>
@@ -3501,7 +3622,7 @@ function showInvoice(idOrInv) {
     ? `<div class="void-banner"><i class="ti ti-ban" style="font-size:18px"></i><div><strong>VOIDED</strong>${inv.voidReason ? ' — ' + inv.voidReason : ''}<br/><span style="font-size:10px">Voided by ${inv.voidedBy||'—'} on ${inv.voidedAt||'—'}</span></div></div>` : '';
 
   const cashSaleBanner = isRetroInv
-    ? `<div class="cash-banner"><i class="ti ti-receipt" style="font-size:15px"></i> This invoice was generated from Cash Sale <strong>${inv.cashSaleRef}</strong>. Revenue already recorded — this is a paper document only.</div>` : '';
+    ? `<div class="cash-banner"><i class="ti ti-receipt" style="font-size:15px"></i> Invoice generated from Cash Sale <strong>${inv.cashSaleRef}</strong>. Payments recorded here apply to the original cash sale.</div>` : '';
 
   const convertedBanner = (isQuotation && inv.status === 'converted' && inv.invoiceRef)
     ? `<div style="background:#dcfce7;border:1px solid #bbf7d0;border-radius:8px;padding:10px;margin-top:10px;font-size:12px;color:#166534"><i class="ti ti-circle-check"></i> Converted to Invoice <strong>${inv.invoiceRef}</strong></div>` : '';
@@ -3515,7 +3636,7 @@ function showInvoice(idOrInv) {
       <div style="font-size:10px;font-weight:600;color:#166534;margin-bottom:6px;text-transform:uppercase">Payment History</div>
       ${pays.map(p => `<div class="pay-history-item">
         <span style="color:var(--muted);font-size:10px;flex:0 0 auto">${p.paidAt}</span>
-        <span style="text-transform:capitalize;flex:1;padding:0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.method}${p.note ? ' — ' + p.note : ''}</span>
+        <span style="flex:1;padding:0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${fmtPayMethod(p.method)}${p.note ? ' — ' + p.note : ''}</span>
         <span style="font-weight:600;color:var(--green);margin-right:6px">${fmt(p.amount)}</span>
         ${hasPerm('inv.record_payment') && !isVoided ? `
           <button class="btn btn-sm btn-outline" style="padding:2px 6px;font-size:10px;margin-right:3px" onclick="openEditPaymentModal('${p.id}')" title="Edit payment"><i class="ti ti-pencil" style="font-size:11px"></i></button>
@@ -3525,7 +3646,7 @@ function showInvoice(idOrInv) {
       <div style="display:flex;justify-content:space-between;padding-top:6px;margin-top:4px;border-top:1px solid #bbf7d0;font-size:11px;font-weight:600;color:#166534">
         <span>Total Paid</span><span>${fmt(totalPaid)}</span>
       </div>
-      ${balance > 0 && !isRetroInv ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:12px;font-weight:700;color:#dc2626"><span>Balance Due</span><span>${fmt(balance)}</span></div>` : ''}
+      ${balance > 0 ? `<div style="display:flex;justify-content:space-between;margin-top:4px;font-size:12px;font-weight:700;color:#dc2626"><span>Balance Due</span><span>${fmt(balance)}</span></div>` : ''}
     </div>` : '';
 
   const waBtn = inv.clientWhatsApp
@@ -3581,7 +3702,7 @@ function showInvoice(idOrInv) {
       ${emailBtn}${waBtn}
       <button class="btn btn-outline btn-sm" onclick="window.print()"><i class="ti ti-printer"></i> Print</button>
       ${hasPerm('inv.edit') ? `<button class="btn btn-outline btn-sm" onclick="openEditInvoice('${inv.id}')"><i class="ti ti-pencil"></i> Edit</button>` : ''}
-      ${balance > 0 && !isRetroInv && hasPerm('inv.record_payment') ? `<button class="btn btn-green btn-sm" onclick="openPaymentModal('${inv.id}')"><i class="ti ti-plus"></i> Record Payment</button>` : ''}
+      ${balance > 0 && hasPerm('inv.record_payment') ? `<button class="btn btn-green btn-sm" onclick="openPaymentModal('${inv.id}','${isRetroInv ? inv.cashSaleRef : inv.id}')"><i class="ti ti-plus"></i> Record Payment</button>` : ''}
       ${status === 'Unpaid' && hasPerm('inv.record_payment') ? `<button class="btn btn-amber btn-sm" onclick="markFullyPaid('${inv.id}')"><i class="ti ti-check"></i> Mark Paid</button>` : ''}
       ${canVoid ? `<button class="btn btn-sm" style="background:#f3f4f6;color:#6b7280;border:1px solid #d1d5db" onclick="openVoidModal('${inv.id}')"><i class="ti ti-ban"></i> Void</button>` : ''}
       ${hasPerm('inv.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5" onclick="deleteInvoice('${inv.id}');closeModal('inv-modal')"><i class="ti ti-trash"></i> Delete</button>` : ''}
@@ -3853,16 +3974,23 @@ async function saveEditedInvoice() {
 }
 
 // ── PAYMENT MODAL ────────────────────────────────────────
-function openPaymentModal(invId) {
-  const inv = invoices.find(i => i.id === invId); if (!inv) return;
-  const balance = invBalance(inv);
+// invId = the document the user sees (may be a retro invoice)
+// payTarget = where payment is actually stored (cashSaleRef for retro invoices)
+// returnTo  = which document to show after saving (the one the user had open)
+function openPaymentModal(invId, payTarget) {
+  const returnTo = invId;
+  const targetId = payTarget || invId;
+  const inv = invoices.find(i => i.id === targetId); if (!inv) return;
+  const displayInv = invoices.find(i => i.id === invId) || inv;
+  const balance = invBalance(displayInv);
   const _n = new Date();
   const _today = `${_n.getFullYear()}-${String(_n.getMonth()+1).padStart(2,'0')}-${String(_n.getDate()).padStart(2,'0')}`;
   const _nowTime = `${String(_n.getHours()).padStart(2,'0')}:${String(_n.getMinutes()).padStart(2,'0')}`;
   document.getElementById('payment-modal-body').innerHTML = `
+    <input type="hidden" id="pay-return-to" value="${returnTo}"/>
     <div style="background:#f8f8f6;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:14px;font-size:12px">
-      <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--muted)">Invoice</span><span style="font-weight:600">${inv.id} — ${inv.clientName}</span></div>
-      <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--muted)">Invoice Total</span><span>${fmt(inv.total)}</span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--muted)">Document</span><span style="font-weight:600">${displayInv.id} — ${displayInv.clientName}</span></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--muted)">Total</span><span>${fmt(displayInv.total)}</span></div>
       <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Balance Due</span><span style="font-weight:700;color:#dc2626">${fmt(balance)}</span></div>
     </div>
     <div style="display:grid;gap:10px">
@@ -3876,7 +4004,7 @@ function openPaymentModal(invId) {
       </div>
       <div id="payment-details-box"></div>
       <div><label>Note / Reference</label><input id="pay-note" placeholder="e.g. Balance, M-Pesa ref NKW1234…"/></div>
-      <button class="btn btn-green" style="width:100%;justify-content:center" onclick="recordPayment('${invId}')"><i class="ti ti-check"></i> Save Payment</button>
+      <button class="btn btn-green" style="width:100%;justify-content:center" onclick="recordPayment('${targetId}')"><i class="ti ti-check"></i> Save Payment</button>
     </div>`;
   closeModal('inv-modal');
   openModal('payment-modal');
@@ -3918,6 +4046,7 @@ async function recordPayment(invId) {
   if (amount <= 0) { alert('Enter a valid amount.'); return; }
   const method = document.getElementById('pay-method').value;
   const note = document.getElementById('pay-note').value.trim();
+  const returnTo = document.getElementById('pay-return-to')?.value || invId;
   const inv = invoices.find(i => i.id === invId); if (!inv) return;
   const bal = invBalance(inv);
   if (amount > bal + 0.01) { alert(`Amount exceeds balance of ${fmt(bal)}`); return; }
@@ -3929,9 +4058,14 @@ async function recordPayment(invId) {
   const p = { id: uid(), invoiceId: invId, amount, method, note, paidAt: dateStr(payDt) + ' ' + timeStr(payDt) };
   payments.push(p);
   await dbInsertPayment(p);
-  if (invBalance(inv) <= 0) { inv.status = 'Paid'; await dbUpdateInvoice(inv); }
+  const newBal = invBalance(inv);
+  if (newBal <= 0) { inv.status = 'Paid'; } else { inv.status = 'Partial'; }
+  await dbUpdateInvoice(inv);
+  // Sync status on any retro invoice that references this cash sale
+  const retroInv = invoices.find(i => i.cashSaleRef === invId);
+  if (retroInv) { retroInv.status = newBal <= 0 ? 'Paid' : 'Partial'; await dbUpdateInvoice(retroInv); }
   closeModal('payment-modal');
-  showInvoice(invId);
+  showInvoice(returnTo);
   renderDashboard();
 }
 
@@ -4037,6 +4171,9 @@ async function updatePayment() {
     else inv.status = 'Unpaid';
   }
   await dbUpdateInvoice(inv);
+  // Sync status on any retro invoice that references this cash sale
+  const retroInvUp = invoices.find(i => i.cashSaleRef === inv.id);
+  if (retroInvUp) { retroInvUp.status = newBal <= 0 ? 'Paid' : 'Partial'; await dbUpdateInvoice(retroInvUp); }
 
   closeModal('payment-modal');
   showInvoice(inv.id);
@@ -4063,6 +4200,9 @@ async function deletePayment(payId) {
       else inv.status = 'Unpaid';
     }
     await dbUpdateInvoice(inv);
+    // Sync status on any retro invoice that references this cash sale
+    const retroInvDel = invoices.find(i => i.cashSaleRef === inv.id);
+    if (retroInvDel) { retroInvDel.status = invBalance(inv) <= 0 ? 'Paid' : (remaining > 0 ? 'Partial' : 'Unpaid'); await dbUpdateInvoice(retroInvDel); }
     showInvoice(inv.id);
   }
   renderDashboard();
@@ -4128,6 +4268,8 @@ function renderInvoices() {
     else if (sf === 'declined')  filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'declined');
     else if (sf === 'converted') filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'converted');
     else if (sf === 'expired')   filtered = filtered.filter(i => (i.status||'').toLowerCase() === 'expired');
+  } else if (isCsTab && invFilter !== 'all') {
+    filtered = filtered.filter(i => (i.payMethod||'cash').split('+').includes(invFilter));
   } else if (!isHeldTab && !isCsTab) {
     if (invFilter === 'paid')         filtered = filtered.filter(i => i.type !== 'quotation' && invStatus(i) === 'Paid');
     else if (invFilter === 'partial') filtered = filtered.filter(i => i.type !== 'quotation' && invStatus(i) === 'Partial');
@@ -4164,7 +4306,13 @@ function renderInvoices() {
       {k:'expired',label:'Expired',cls:'sp-expired'}
     ];
     pills = '<div class="status-pills"><span style="font-size:11px;color:var(--muted);margin-right:2px">Filter:</span>' + pDefs.map(p=>'<span class="status-pill '+p.cls+(invFilter===p.k?' active':'')+'" onclick="setInvFilter(\''+p.k+'\')">'+p.label+'</span>').join('') + '</div>';
-  } else if (!isCsTab && !isHeldTab) {
+  } else if (isCsTab) {
+    const pDefs = [
+      {k:'all',label:'All',cls:'sp-all'},{k:'cash',label:'Cash',cls:'sp-paid'},
+      {k:'mpesa',label:'M-Pesa',cls:'sp-partial'},{k:'bank',label:'Bank',cls:'sp-unpaid'},
+    ];
+    pills = '<div class="status-pills"><span style="font-size:11px;color:var(--muted);margin-right:2px">Method:</span>' + pDefs.map(p=>'<span class="status-pill '+p.cls+(invFilter===p.k?' active':'')+'" onclick="setInvFilter(\''+p.k+'\')">'+p.label+'</span>').join('') + '</div>';
+  } else if (!isHeldTab) {
     const pDefs = [
       {k:'all',label:'All',cls:'sp-all'},{k:'paid',label:'Paid',cls:'sp-paid'},
       {k:'partial',label:'Partial',cls:'sp-partial'},{k:'unpaid',label:'Unpaid',cls:'sp-unpaid'},
@@ -4239,12 +4387,14 @@ function renderInvoices() {
       actBtns += '<button class="btn btn-sm btn-green" onclick="event.stopPropagation();resumeHeldOrder(\''+i.id+'\')" style="margin-right:3px" title="Resume"><i class="ti ti-player-play"></i></button>';
       actBtns += '<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="event.stopPropagation();deleteHeldOrder(\''+i.id+'\')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>';
     } else if (isInvTab || isMixed) {
-      if (!isQt && !isVoided && dispBal>0 && hasPerm('inv.record_payment')) actBtns += '<button class="btn btn-sm btn-green" onclick="openPaymentModal(\''+i.id+'\')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>';
+      var _payTgt = i.cashSaleRef ? '\''+i.id+'\',\''+i.cashSaleRef+'\'' : '\''+i.id+'\'';
+      if (!isQt && !isVoided && dispBal>0 && hasPerm('inv.record_payment')) actBtns += '<button class="btn btn-sm btn-green" onclick="openPaymentModal('+_payTgt+')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>';
       if (!isQt && !isVoided && hasPerm('inv.delete')) actBtns += '<button class="btn btn-sm btn-outline" style="margin-right:3px;padding:3px 7px;color:#6b7280;border-color:#d1d5db" onclick="'+(isMixed?'event.stopPropagation();':'')+'openVoidModal(\''+i.id+'\')" title="Void Invoice"><i class="ti ti-ban" style="font-size:11px"></i></button>';
       if (isQt && (i.status||'').toLowerCase()==='pending' && hasPerm('inv.create')) actBtns += '<button class="btn btn-sm btn-green" style="margin-right:3px;font-size:10px" onclick="event.stopPropagation();convertQuotationToInvoice(\''+i.id+'\')" title="Convert to Invoice"><i class="ti ti-file-invoice"></i></button>';
       if (hasPerm('inv.delete')) actBtns += '<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="'+(isMixed?'event.stopPropagation();':'')+'deleteInvoice(\''+i.id+'\')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>';
     } else {
-      if (!isVoided && dispBal>0 && hasPerm('inv.record_payment')) actBtns += '<button class="btn btn-sm btn-green" onclick="openPaymentModal(\''+i.id+'\')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>';
+      var _payTgt2 = i.cashSaleRef ? '\''+i.id+'\',\''+i.cashSaleRef+'\'' : '\''+i.id+'\'';
+      if (!isVoided && dispBal>0 && hasPerm('inv.record_payment')) actBtns += '<button class="btn btn-sm btn-green" onclick="openPaymentModal('+_payTgt2+')" style="margin-right:3px" title="Record Payment"><i class="ti ti-plus"></i></button>';
       if (!isVoided && hasPerm('inv.delete')) actBtns += '<button class="btn btn-sm btn-outline" style="margin-right:3px;padding:3px 7px;color:#6b7280;border-color:#d1d5db" onclick="openVoidModal(\''+i.id+'\')" title="Void Invoice"><i class="ti ti-ban" style="font-size:11px"></i></button>';
       if (hasPerm('inv.delete')) actBtns += '<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5" onclick="deleteInvoice(\''+i.id+'\')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>';
     }
@@ -4252,13 +4402,23 @@ function renderInvoices() {
     var rowStyle = isVoided ? 'cursor:pointer;opacity:0.55' : 'cursor:pointer';
 
     if (isCsTab) {
-      var methodLabel = (i.payMethod||'cash').charAt(0).toUpperCase()+(i.payMethod||'cash').slice(1);
+      var invPmts = invPayments(i.cashSaleRef || i.id);
+      var methodLines;
+      if (invPmts.length) {
+        var relevantPmts = (invFilter !== 'all') ? invPmts.filter(function(p){ return p.method === invFilter; }) : invPmts;
+        methodLines = relevantPmts.map(function(p){
+          return (PM_LABELS[p.method]||p.method.charAt(0).toUpperCase()+p.method.slice(1))+' <span style="font-weight:600;color:var(--fg)">'+fmt(p.amount)+'</span>';
+        }).join('<br/>');
+      } else {
+        var pm0 = (i.payMethod||'cash');
+        methodLines = (PM_LABELS[pm0]||pm0.charAt(0).toUpperCase()+pm0.slice(1))+' <span style="font-weight:600;color:var(--fg)">'+fmt(i.total)+'</span>';
+      }
       return '<tr style="'+rowStyle+'" onclick="openInvoice(\''+i.id+'\')">'
         +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+linkBadge+'</td>'
         +'<td style="font-weight:500">'+(i.clientName||'Walk-in')+'</td>'
         +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
         +'<td style="text-align:right;font-weight:600">'+fmt(i.total)+'</td>'
-        +'<td style="font-size:11px;color:var(--muted)">'+methodLabel+'</td>'
+        +'<td style="font-size:11px;color:var(--muted);line-height:1.6">'+methodLines+'</td>'
         +'<td><span class="badge badge-teal">Paid</span></td>'
         +'<td style="font-size:10px;color:var(--muted)">'+(deptNames||'—')+'</td>'
         +'<td style="color:var(--muted);font-size:11px">'+i.date+'</td>'
@@ -4935,9 +5095,17 @@ function renderAnalytics() {
     deptClientRev[item.dept][inv.clientName] = (deptClientRev[item.dept][inv.clientName] || 0) + item.price * item.qty;
   }));
 
-  // Payment methods
+  // Payment methods — distribute split payments into individual method buckets
   const pmTotals = {};
-  filtered.forEach(i => { pmTotals[i.payMethod] = (pmTotals[i.payMethod] || 0) + i.total; });
+  filtered.forEach(inv => {
+    const pts = invPayments(inv.cashSaleRef || inv.id);
+    if (pts.length) {
+      pts.forEach(p => { pmTotals[p.method] = (pmTotals[p.method] || 0) + p.amount; });
+    } else {
+      const pm = inv.payMethod || 'cash';
+      if (!pm.includes('+')) pmTotals[pm] = (pmTotals[pm] || 0) + inv.total;
+    }
+  });
 
   // Top clients — overall & per dept
   const clientRevAll = {};
@@ -5190,7 +5358,7 @@ function renderAnalytics() {
               const pct = Math.round(val / total * 100);
               return `<div style="padding:6px 0;border-bottom:1px solid #f5f5f3">
                 <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
-                  <span style="text-transform:capitalize">${pm}</span>
+                  <span>${fmtPayMethod(pm)}</span>
                   <span><span style="color:var(--muted);font-size:10px;margin-right:6px">${pct}%</span><strong>${fmt(val)}</strong></span>
                 </div>
                 <div style="height:4px;background:#f0f0ee;border-radius:2px"><div style="height:4px;width:${pct}%;background:var(--blue);border-radius:2px"></div></div>
@@ -5432,7 +5600,7 @@ function exportReportCSV() {
   filtered.forEach(inv => {
     const depts = [...new Set(inv.items.map(i => DEPTS.find(d=>d.id===i.dept)?.name||i.dept))].join('; ');
     const items = inv.items.map(i => i.name).join('; ');
-    rows.push([inv.id, inv.date, inv.clientName||'', inv.clientPhone||'', depts, items, inv.total, invPaid(inv), invBalance(inv), invStatus(inv), inv.payMethod]);
+    rows.push([inv.id, inv.date, inv.clientName||'', inv.clientPhone||'', depts, items, inv.total, invPaid(inv), invBalance(inv), invStatus(inv), fmtPayMethod(inv.payMethod)]);
   });
   // Append expenses block + profitability summary
   const expList = expensesInRange(periodFrom, periodTo);
@@ -5475,7 +5643,7 @@ function exportReportXLSX() {
     'Paid (KSh)': invPaid(inv),
     'Balance (KSh)': invBalance(inv),
     'Status': invStatus(inv),
-    'Payment Method': inv.payMethod,
+    'Payment Method': fmtPayMethod(inv.payMethod),
   }));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(invData), 'Invoices');
 
