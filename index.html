@@ -449,7 +449,11 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
       <div style="padding:18px;display:grid;gap:10px">
         <div><label>Full Name *</label><input id="cl-name" placeholder="e.g. John Otieno"/></div>
         <div class="two-col">
-          <div><label>Phone *</label><input id="cl-phone" placeholder="+254 7XX XXX XXX"/></div>
+          <div>
+            <label>Phone *</label>
+            <input id="cl-phone" placeholder="+254 7XX XXX XXX" oninput="checkClientPhoneDup(this.value)"/>
+            <div id="cl-phone-dup" style="display:none;margin-top:4px;padding:6px 10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;font-size:11px;color:#c2410c"></div>
+          </div>
           <div><label>Email</label><input id="cl-email" placeholder="client@email.com"/></div>
         </div>
         <div class="two-col">
@@ -795,9 +799,15 @@ function nextCashSaleNumber() {
 function genReferralCode(name) {
   const prefix = (name || 'CL').replace(/[^a-zA-Z]/g, '').slice(0, 2).toUpperCase().padEnd(2, 'X');
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
-  return 'REF-' + prefix + code;
+  const existing = new Set(clients.map(c => c.referral_code).filter(Boolean));
+  let code, tries = 0;
+  do {
+    let rand = '';
+    for (let i = 0; i < 4; i++) rand += chars[Math.floor(Math.random() * chars.length)];
+    code = 'REF-' + prefix + rand;
+    tries++;
+  } while (existing.has(code) && tries < 50);
+  return code;
 }
 
 // ── SUPABASE ────────────────────────────────────────────
@@ -815,9 +825,15 @@ const SUPABASE_CONFIG = {
 window.onload = () => {
   // Auto-connect to Supabase with hardcoded credentials
   if (SUPABASE_CONFIG.url && SUPABASE_CONFIG.key && !SUPABASE_CONFIG.url.includes('YOUR_')) {
-    initSupabase(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
-    localStorage.setItem('mmp_sb', JSON.stringify({ url: SUPABASE_CONFIG.url, key: SUPABASE_CONFIG.key }));
-    showDbBadge(true);
+    try {
+      initSupabase(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
+      localStorage.setItem('mmp_sb', JSON.stringify({ url: SUPABASE_CONFIG.url, key: SUPABASE_CONFIG.key }));
+      showDbBadge(true);
+    } catch(e) {
+      // Supabase library failed to load (CDN blocked or offline)
+      const errEl = document.getElementById('ep-err');
+      if (errEl) errEl.textContent = 'Offline or script blocked — check your internet connection and reload.';
+    }
   } else {
     // Show setup if credentials not configured
     document.getElementById('sb-setup').style.display = 'block';
@@ -1188,13 +1204,24 @@ function updateStatusMessage(msg, text) {
 async function loadFromSupabase() {
   if (!useSupabase) return;
   try {
-    const [{ data: cls }, { data: invs }, { data: pays }, expRes] = await Promise.all([
-      sb.from('clients').select('*').eq('shop_id', currentShopId),
+    // Load all clients in pages of 1000 to bypass Supabase's row cap
+    const allClients = [];
+    let from = 0;
+    const PAGE = 1000;
+    while (true) {
+      const { data: cls, error } = await sb.from('clients').select('*').eq('shop_id', currentShopId).range(from, from + PAGE - 1);
+      if (error || !cls || !cls.length) break;
+      allClients.push(...cls);
+      if (cls.length < PAGE) break;
+      from += PAGE;
+    }
+    clients = allClients.map(r => ({ id: r.id, name: r.name, phone: r.phone, email: r.email, event: r.event, birthday: r.birthday || null, notes: r.notes, referral_code: r.referral_code || null, referred_by: r.referred_by || null, createdAt: r.created_at }));
+
+    const [{ data: invs }, { data: pays }, expRes] = await Promise.all([
       sb.from('invoices').select('*').eq('shop_id', currentShopId).order('created_at', { ascending: false }),
       sb.from('payments').select('*').eq('shop_id', currentShopId),
       sb.from('expenses').select('*').eq('shop_id', currentShopId).order('date', { ascending: false }).then(r => r, () => ({ data: null })),
     ]);
-    if (cls) clients = cls.map(r => ({ id: r.id, name: r.name, phone: r.phone, email: r.email, event: r.event, birthday: r.birthday || null, notes: r.notes, referral_code: r.referral_code || null, referred_by: r.referred_by || null, createdAt: r.created_at }));
     if (invs) invoices = invs.map(r => r.data);
     if (pays) payments = pays.map(r => ({ id: r.id, invoiceId: r.invoice_id, amount: parseFloat(r.amount), method: r.method, note: r.note, paidAt: r.paid_at }));
     if (expRes && expRes.data) expenses = expRes.data.map(r => ({ id: r.id, amount: parseFloat(r.amount) || 0, category: r.category || 'Miscellaneous', payee: r.payee || '', method: r.method || 'cash', note: r.note || '', date: r.date || '', dept: r.dept || '' }));
@@ -1360,22 +1387,23 @@ async function epLogin() {
   let shopId = null;
   let staffRecord = null;
 
-  if (useSupabase) {
-    try {
-      // Search across all businesses to find staff with matching username and password
-      const { data: allStaff, error } = await sb
-        .from('pos_staff')
-        .select('*')
-        .eq('username', username);
-      
-      if (!error && allStaff && allStaff.length > 0) {
-        // Find staff record with matching password
-        staffRecord = allStaff.find(s => s.password_hash === password);
-        if (staffRecord) {
-          shopId = staffRecord.client_id;
-        }
-      }
-    } catch(e) { console.warn('Staff lookup error:', e); }
+  if (!useSupabase) {
+    btn.disabled = false; btn.textContent = 'Sign In →';
+    errEl.textContent = 'Cannot reach server. Check your internet connection and reload.';
+    return;
+  }
+
+  try {
+    const { data: allStaff, error } = await sb.from('pos_staff').select('*').eq('username', username);
+    if (error) throw error;
+    if (allStaff && allStaff.length > 0) {
+      staffRecord = allStaff.find(s => s.password_hash === password);
+      if (staffRecord) shopId = staffRecord.client_id;
+    }
+  } catch(e) {
+    btn.disabled = false; btn.textContent = 'Sign In →';
+    errEl.textContent = 'Connection error: ' + (e.message || 'Could not reach server.');
+    return;
   }
 
   if (!staffRecord || !shopId) {
@@ -1385,25 +1413,19 @@ async function epLogin() {
   }
 
   // Verify shop exists and is active
-  if (useSupabase) {
-    try {
-      const { data: shop, error: shopErr } = await sb.from('clients').select('name,status').eq('id', shopId).single();
-      if (shopErr || !shop) {
-        btn.disabled = false; btn.textContent = 'Sign In →';
-        errEl.textContent = 'Service unavailable. Contact EdosPoa support.';
-        return;
-      }
+  currentShopId   = shopId;
+  currentShopName = shopId;
+  try {
+    const { data: shop } = await sb.from('clients').select('name,status').eq('id', shopId).maybeSingle();
+    if (shop) {
       if (shop.status === 'suspended') {
         btn.disabled = false; btn.textContent = 'Sign In →';
         errEl.textContent = 'This account is suspended. Contact EdosPoa support.';
         return;
       }
-      currentShopId   = shopId;
       currentShopName = shop.name;
-    } catch(e) { console.warn('Shop lookup error:', e); currentShopId = shopId; currentShopName = shopId; }
-  } else {
-    currentShopId = shopId; currentShopName = shopId;
-  }
+    }
+  } catch(e) { /* non-fatal — proceed with shopId as name */ }
 
   if (staffRecord.is_active === false) {
     btn.disabled = false; btn.textContent = 'Sign In →';
@@ -1701,6 +1723,10 @@ async function persistShopSettings() {
 // State
 let cart = [], payMethod = 'cash', splitPayRows = [], invoices = [], clients = [], payments = [], expenses = [];
 let activeDept = 'all', invFilter = 'all', invTypeFilter = 'all', invSearch = '', invDeptFilter = 'all', clientSearch = '';
+let clientsPage = 1, clientsPerPage = 100;
+let invoicesPage = 1, invoicesPerPage = 100;
+let _filteredClients = [], _filteredExpenses = [], _filteredInvoiceRows = [];
+let selectedClientIds = new Set(), selectedExpenseIds = new Set(), selectedInvIds = new Set();
 let activePeriod = 'all', mpesaPhone = '', mpesaMode = 'stk';
 let periodFrom = '', periodTo = '';
 let svcSearch = '', svcDeptFilter = 'all';
@@ -2155,7 +2181,11 @@ function renderDashboard() {
       </div>` : '';
 
   // ── KPI stat cards ────────────────────────────────────────
+  const totalClients  = clients.length;
+  const newThisPeriod = clients.filter(c => c.createdAt && filterDashPeriod([{date: c.createdAt}]).length > 0).length;
+
   const statCards = [
+    (isOwnerAdmin || hasPerm('clients')) ? `<div class="stat-card" style="border-top-color:#0ea5e9"><div class="stat-label">Total Clients</div><div class="stat-value">${totalClients.toLocaleString()}</div><div class="stat-sub">${newThisPeriod > 0 ? newThisPeriod + ' new · ' : ''}${periodLabel}</div></div>` : '',
     dp('dash.view_billed')      ? `<div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Total Billed</div><div class="stat-value">${fmt(total)}</div><div class="stat-sub">${periodCount} record${periodCount===1?'':'s'} · ${periodLabel}</div></div>` : '',
     dp('dash.view_collected')   ? `<div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Collected</div><div class="stat-value">${fmt(paid)}</div><div class="stat-sub">Fully paid · ${periodLabel}</div></div>` : '',
     dp('dash.view_partial')     ? `<div class="stat-card" style="border-top-color:var(--amber)"><div class="stat-label">Partial Balance</div><div class="stat-value">${fmt(partial)}</div><div class="stat-sub">Ongoing credit</div></div>` : '',
@@ -2888,7 +2918,7 @@ async function checkout() {
   if (!clientSel && clientPhone) {
     const existing = clients.find(c => c.phone === clientPhone);
     if (!existing) {
-      const nc = { id: uid(), name: clientName, phone: clientPhone, email: clientEmail || '', event: '', birthday: null, notes: '', referral_code: null, referred_by: null, createdAt: dateStr() };
+      const nc = { id: uid(), name: clientName, phone: clientPhone, email: clientEmail || '', event: '', birthday: null, notes: '', referral_code: genReferralCode(clientName), referred_by: null, createdAt: dateStr() };
       clients.push(nc);
       await dbInsertClient(nc);
     }
@@ -3097,7 +3127,7 @@ async function checkoutAsCashSale() {
   if (!clientSel && clientPhone) {
     const existing = clients.find(c => c.phone === clientPhone);
     if (!existing) {
-      const nc = { id: uid(), name: clientName, phone: clientPhone, email: clientEmail || '', event: '', birthday: null, notes: '', referral_code: null, referred_by: null, createdAt: dateStr() };
+      const nc = { id: uid(), name: clientName, phone: clientPhone, email: clientEmail || '', event: '', birthday: null, notes: '', referral_code: genReferralCode(clientName), referred_by: null, createdAt: dateStr() };
       clients.push(nc);
       await dbInsertClient(nc);
     }
@@ -3242,6 +3272,8 @@ async function deleteHeldOrder(id) {
 
 // ── INVOICE BUILDERS ─────────────────────────────────────
 function buildInvoiceHTML(inv) {
+  const _invClient = inv.clientId ? clients.find(c => c.id === inv.clientId) : null;
+  const _refCode   = _invClient?.referral_code || null;
   const pays = invPayments(inv.cashSaleRef || inv.id);
   const totalPaid = pays.reduce((a, p) => a + p.amount, 0);
   const balance = inv.total - totalPaid;
@@ -3320,6 +3352,7 @@ function buildInvoiceHTML(inv) {
         <h3>${inv.clientName}</h3>
         ${inv.clientPhone ? `<p>${inv.clientPhone}</p>` : ''}
         ${inv.clientEmail ? `<p>${inv.clientEmail}</p>` : ''}
+        ${_refCode ? `<p style="margin-top:5px;font-family:monospace;font-size:10px;color:#2563eb;font-weight:700;letter-spacing:.5px">REF: ${_refCode}</p>` : ''}
         <p style="margin-top:6px;color:#555;font-size:10px">Cashier: ${inv.cashier}</p>
       </div>
       <div class="inv-meta-box">
@@ -3410,6 +3443,8 @@ function buildInvoiceHTML(inv) {
 }
 
 function buildQuotationHTML(inv) {
+  const _qCl      = inv.clientId ? clients.find(c => c.id === inv.clientId) : null;
+  const _qRefCode = _qCl?.referral_code || null;
   const S = SETTINGS;
 
   function renderItemRows(items) {
@@ -3478,6 +3513,7 @@ function buildQuotationHTML(inv) {
         <h3>${inv.clientName}</h3>
         ${inv.clientPhone ? `<p>${inv.clientPhone}</p>` : ''}
         ${inv.clientEmail ? `<p>${inv.clientEmail}</p>` : ''}
+        ${_qRefCode ? `<p style="margin-top:5px;font-family:monospace;font-size:10px;color:#2563eb;font-weight:700;letter-spacing:.5px">REF: ${_qRefCode}</p>` : ''}
         <p style="margin-top:6px;color:#555;font-size:10px">Event: ${inv.eventDate || 'To be confirmed'}</p>
       </div>
       <div class="inv-meta-box">
@@ -3537,6 +3573,8 @@ function buildQuotationHTML(inv) {
 }
 
 function buildReceiptHTML(inv) {
+  const _rCl      = inv.clientId ? clients.find(c => c.id === inv.clientId) : null;
+  const _rRefCode = _rCl?.referral_code || null;
   const pays = invPayments(inv.id);
   const totalPaid = pays.reduce((a, p) => a + p.amount, 0);
   const balance = inv.total - totalPaid;
@@ -3554,6 +3592,7 @@ function buildReceiptHTML(inv) {
     <div style="border-bottom:1px dashed var(--border);padding-bottom:10px;margin-bottom:10px;font-size:9px">
       <strong>${inv.clientName}</strong><br/>
       ${inv.clientPhone ? `Tel: ${inv.clientPhone}<br/>` : ''}
+      ${_rRefCode ? `<span style="font-family:monospace;font-size:9px;color:#2563eb;font-weight:700">REF: ${_rRefCode}</span><br/>` : ''}
       Cashier: ${inv.cashier}
     </div>
     <div class="receipt-items">
@@ -4294,7 +4333,15 @@ function renderInvoices() {
   }
 
   const rows = [...filtered].reverse();
-  const colspanEmpty = isQtTab ? 9 : isHeldTab ? 8 : isCsTab ? 9 : (isMixed ? 11 : 10);
+  _filteredInvoiceRows = rows;   // full list — used by exports and batch-delete
+  const _invTotal      = rows.length;
+  const _invPerPage    = invoicesPerPage === 'all' ? _invTotal : invoicesPerPage;
+  const _invTotalPages = _invPerPage > 0 ? Math.ceil(_invTotal / _invPerPage) : 1;
+  if (invoicesPage > _invTotalPages) invoicesPage = _invTotalPages || 1;
+  const pageRows = invoicesPerPage === 'all' ? rows : rows.slice((invoicesPage - 1) * _invPerPage, invoicesPage * _invPerPage);
+  selectedInvIds = new Set();
+  const canDelInv = hasPerm('inv.delete');
+  const colspanEmpty = (isQtTab ? 9 : isHeldTab ? 8 : isCsTab ? 9 : (isMixed ? 11 : 10)) + (canDelInv ? 1 : 0);
 
   // ── Status pills ──────────────────────────────────────────
   let pills = '';
@@ -4322,17 +4369,18 @@ function renderInvoices() {
   }
 
   // ── Table header ──────────────────────────────────────────
+  var chkTh = canDelInv ? '<th style="width:32px"><input type="checkbox" id="chk-all-inv" onchange="toggleAllInvSel(this)" title="Select all"/></th>' : '';
   let thead = '';
   if (isCsTab) {
-    thead = '<tr><th>Number</th><th>Client</th><th>Phone</th><th style="text-align:right">Amount</th><th>Method</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
+    thead = '<tr>'+chkTh+'<th>Number</th><th>Client</th><th>Phone</th><th style="text-align:right">Amount</th><th>Method</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
   } else if (isHeldTab) {
-    thead = '<tr><th>Hold ID</th><th>Client</th><th>Phone</th><th style="text-align:right">Amount</th><th>Items</th><th>Cashier</th><th>Date</th><th></th></tr>';
+    thead = '<tr>'+chkTh+'<th>Hold ID</th><th>Client</th><th>Phone</th><th style="text-align:right">Amount</th><th>Items</th><th>Cashier</th><th>Date</th><th></th></tr>';
   } else if (isInvTab) {
-    thead = '<tr><th>Number</th><th>Client</th><th>Phone</th><th style="text-align:right">'+totalHeader+'</th><th style="text-align:right">'+paidHeader+'</th><th style="text-align:right">'+balHeader2+'</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
+    thead = '<tr>'+chkTh+'<th>Number</th><th>Client</th><th>Phone</th><th style="text-align:right">'+totalHeader+'</th><th style="text-align:right">'+paidHeader+'</th><th style="text-align:right">'+balHeader2+'</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
   } else if (isQtTab) {
-    thead = '<tr><th>Number</th><th>Client</th><th>Phone</th><th style="text-align:right">Amount</th><th>Valid Until</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
+    thead = '<tr>'+chkTh+'<th>Number</th><th>Client</th><th>Phone</th><th style="text-align:right">Amount</th><th>Valid Until</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
   } else {
-    thead = '<tr><th>Number</th><th>Type</th><th>Client</th><th>Phone</th><th style="text-align:right">'+totalHeader+'</th><th style="text-align:right">'+paidHeader+'</th><th style="text-align:right">'+balHeader2+'</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
+    thead = '<tr>'+chkTh+'<th>Number</th><th>Type</th><th>Client</th><th>Phone</th><th style="text-align:right">'+totalHeader+'</th><th style="text-align:right">'+paidHeader+'</th><th style="text-align:right">'+balHeader2+'</th><th>Status</th><th>Dept</th><th>Date</th><th></th></tr>';
   }
 
   // ── Row builder ───────────────────────────────────────────
@@ -4401,6 +4449,8 @@ function renderInvoices() {
 
     var rowStyle = isVoided ? 'cursor:pointer;opacity:0.55' : 'cursor:pointer';
 
+    var chkTd = canDelInv ? '<td onclick="event.stopPropagation()"><input type="checkbox" class="chk-inv" value="'+i.id+'" onchange="toggleInvSel(\''+i.id+'\',this.checked)"/></td>' : '';
+
     if (isCsTab) {
       var invPmts = invPayments(i.cashSaleRef || i.id);
       var methodLines;
@@ -4414,6 +4464,7 @@ function renderInvoices() {
         methodLines = (PM_LABELS[pm0]||pm0.charAt(0).toUpperCase()+pm0.slice(1))+' <span style="font-weight:600;color:var(--fg)">'+fmt(i.total)+'</span>';
       }
       return '<tr style="'+rowStyle+'" onclick="openInvoice(\''+i.id+'\')">'
+        +chkTd
         +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+linkBadge+'</td>'
         +'<td style="font-weight:500">'+(i.clientName||'Walk-in')+'</td>'
         +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
@@ -4427,6 +4478,7 @@ function renderInvoices() {
     } else if (isHeldTab) {
       var itemCount = Array.isArray(i.items) ? i.items.length : 0;
       return '<tr style="cursor:pointer" onclick="resumeHeldOrder(\''+i.id+'\')">'
+        +chkTd
         +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+'</td>'
         +'<td style="font-weight:500">'+(i.clientName||'Walk-in')+'</td>'
         +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
@@ -4438,6 +4490,7 @@ function renderInvoices() {
         +'</tr>';
     } else if (isInvTab) {
       return '<tr style="'+rowStyle+'" onclick="openInvoice(\''+i.id+'\')">'
+        +chkTd
         +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+linkBadge+'</td>'
         +'<td style="font-weight:500">'+i.clientName+'</td>'
         +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
@@ -4451,6 +4504,7 @@ function renderInvoices() {
         +'</tr>';
     } else if (isQtTab) {
       return '<tr style="cursor:pointer" onclick="openInvoice(\''+i.id+'\')">'
+        +chkTd
         +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+linkBadge+'</td>'
         +'<td style="font-weight:500">'+i.clientName+'</td>'
         +'<td style="color:var(--muted);font-size:11px">'+(i.clientPhone||'—')+'</td>'
@@ -4465,6 +4519,7 @@ function renderInvoices() {
       var typeLabel = i.type==='cash_sale'?'Cash Sale':isQt?'Quote':'Invoice';
       var typeCls   = i.type==='cash_sale'?'badge-teal':isQt?'badge-amber':'badge-blue';
       return '<tr style="'+rowStyle+'" onclick="openInvoice(\''+i.id+'\')">'
+        +chkTd
         +'<td style="font-family:monospace;font-size:11px;color:var(--muted)">'+i.id+linkBadge+'</td>'
         +'<td><span class="badge '+typeCls+'" style="font-size:10px">'+typeLabel+'</span></td>'
         +'<td style="font-weight:500">'+i.clientName+'</td>'
@@ -4505,11 +4560,31 @@ function renderInvoices() {
   if (!rows.length) {
     bodyRows = '<tr><td colspan="'+colspanEmpty+'" style="color:var(--muted);text-align:center;padding:24px"><div style="font-size:28px;margin-bottom:6px">'+emptyIcon+'</div>No '+emptyLabel+' found'+(invSearch?' matching "'+invSearch+'"':'')+'</td></tr>';
   } else {
-    bodyRows = rows.map(buildRow).join('');
+    bodyRows = pageRows.map(buildRow).join('');
   }
 
   var showFooterTotal = (isInvTab || isMixed || isCsTab) && !isHeldTab;
-  var footerHtml = rows.length ? '<div style="padding:8px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);display:flex;justify-content:space-between"><span>'+rows.length+' record'+(rows.length!==1?'s':'')+' shown</span><span>'+(showFooterTotal?'Total: <strong>'+fmt(footerTotal)+'</strong>':'')+'</span></div>' : '';
+  var _invPageInfo = invoicesPerPage === 'all'
+    ? _invTotal + ' record' + (_invTotal !== 1 ? 's' : '')
+    : (Math.min((invoicesPage-1)*_invPerPage+1,_invTotal)) + '–' + Math.min(invoicesPage*_invPerPage,_invTotal) + ' of ' + _invTotal;
+  var _invPageOpts = [20,100,1000,'all'].map(function(v){
+    return '<option value="'+v+'"'+(invoicesPerPage===v?' selected':'')+'>'+( v==='all'?'All':v)+'</option>';
+  }).join('');
+  var _invPagBar = _invTotal > 20 ? (
+    '<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;border-top:1px solid var(--border);flex-wrap:wrap">'
+    +'<span style="font-size:11px;color:var(--muted)">Rows per page:</span>'
+    +'<select style="font-size:11px;padding:2px 6px;border:1px solid var(--border);border-radius:5px" onchange="invoicesPerPage=this.value===\'all\'?\'all\':parseInt(this.value);invoicesPage=1;renderInvoices()">'+_invPageOpts+'</select>'
+    +'<span style="font-size:11px;color:var(--muted);margin-left:6px">'+_invPageInfo+'</span>'
+    +(_invTotalPages>1?'<div style="display:flex;gap:2px;margin-left:auto">'
+      +'<button class="btn btn-sm btn-outline" style="padding:2px 8px" onclick="invoicesPage=1;renderInvoices()" '+(invoicesPage<=1?'disabled':'')+' title="First">«</button>'
+      +'<button class="btn btn-sm btn-outline" style="padding:2px 8px" onclick="invoicesPage--;renderInvoices()" '+(invoicesPage<=1?'disabled':'')+' title="Prev">‹</button>'
+      +'<span style="padding:2px 8px;font-size:11px;color:var(--muted)">Page '+invoicesPage+' / '+_invTotalPages+'</span>'
+      +'<button class="btn btn-sm btn-outline" style="padding:2px 8px" onclick="invoicesPage++;renderInvoices()" '+(invoicesPage>=_invTotalPages?'disabled':'')+' title="Next">›</button>'
+      +'<button class="btn btn-sm btn-outline" style="padding:2px 8px" onclick="invoicesPage='+_invTotalPages+';renderInvoices()" '+(invoicesPage>=_invTotalPages?'disabled':'')+' title="Last">»</button>'
+      +'</div>':'')
+    +'</div>'
+  ) : '';
+  var footerHtml = rows.length ? '<div style="padding:8px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);display:flex;justify-content:space-between"><span>'+rows.length+' record'+(rows.length!==1?'s':'')+' total</span><span>'+(showFooterTotal?'Total: <strong>'+fmt(footerTotal)+'</strong>':'')+'</span></div>' : '';
 
   document.getElementById('page-invoices').innerHTML = invDeptBadge
     + '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:0">'
@@ -4521,20 +4596,80 @@ function renderInvoices() {
     + '<div class="'+tabCls('all')+'" onclick="setInvTypeFilter(\'all\')"><i class="ti ti-list"></i> All <span class="tab-count">'+countAll+'</span></div>'
     + '</div>'
     + '<div style="display:flex;align-items:center;gap:6px;margin:0 0 14px 0;flex-wrap:wrap">'
-    + '<select style="height:32px;padding:0 8px;border:1px solid var(--border);border-radius:7px;font-size:11px;background:#fff;color:var(--text);cursor:pointer;min-width:130px" onchange="invDeptFilter=this.value;renderInvoices()">'
+    + (canDelInv ? '<button id="btn-del-inv" class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;display:none" onclick="deleteSelectedInvoices()"><i class="ti ti-trash"></i> Delete Selected (<span id="sel-inv-count">0</span>)</button>' : '')
+    + '<button class="btn btn-sm btn-outline" onclick="exportInvoicesCSV()" title="Export CSV"><i class="ti ti-table-export"></i> CSV</button>'
+    + '<button class="btn btn-sm btn-outline" onclick="exportInvoicesXLSX()" title="Export Excel"><i class="ti ti-file-spreadsheet"></i> Excel</button>'
+    + '<select style="height:32px;padding:0 8px;border:1px solid var(--border);border-radius:7px;font-size:11px;background:#fff;color:var(--text);cursor:pointer;min-width:130px" onchange="invDeptFilter=this.value;invoicesPage=1;renderInvoices()">'
     + '<option value="all"'+(invDeptFilter==='all'?' selected':'')+'>All Departments</option>'
     + userInvDepts.map(function(d){return '<option value="'+d.id+'"'+(invDeptFilter===d.id?' selected':'')+'>'+d.name+'</option>';}).join('')
     + '</select>'
-    + '<div class="search-bar" style="width:210px;margin:0"><i class="ti ti-search"></i><input placeholder="Search name, ID, phone\u2026" value="'+invSearch+'" oninput="invSearch=this.value;renderInvoices()"/></div>'
+    + '<div class="search-bar" style="width:210px;margin:0"><i class="ti ti-search"></i><input placeholder="Search name, ID, phone\u2026" value="'+invSearch+'" oninput="invSearch=this.value;invoicesPage=1;renderInvoices()"/></div>'
     + '</div>'
     + '</div>'
     + pills
     + '<div class="card" style="padding:0;overflow:hidden"><div style="overflow-x:auto"><table class="table" style="width:100%;min-width:700px"><thead>'+thead+'</thead><tbody>'+bodyRows+'</tbody></table></div>'
     + footerHtml
+    + _invPagBar
     + '</div>';
 }
-function setInvFilter(f) { invFilter = f; renderInvoices(); }
-function setInvTypeFilter(f) { invTypeFilter = f; invFilter = 'all'; invDeptFilter = 'all'; renderInvoices(); }
+function setInvFilter(f) { invFilter = f; invoicesPage = 1; renderInvoices(); }
+function setInvTypeFilter(f) { invTypeFilter = f; invFilter = 'all'; invDeptFilter = 'all'; invoicesPage = 1; renderInvoices(); }
+
+// ── Invoice batch-select helpers ──────────────────────────
+function toggleInvSel(id, checked) {
+  if (checked) selectedInvIds.add(id); else selectedInvIds.delete(id);
+  const btn = document.getElementById('btn-del-inv');
+  const cnt = document.getElementById('sel-inv-count');
+  if (btn) { btn.style.display = selectedInvIds.size ? '' : 'none'; }
+  if (cnt) cnt.textContent = selectedInvIds.size;
+  const allChk = document.getElementById('chk-all-inv');
+  if (allChk) allChk.indeterminate = selectedInvIds.size > 0 && selectedInvIds.size < _filteredInvoiceRows.length;
+}
+function toggleAllInvSel(chk) {
+  document.querySelectorAll('.chk-inv').forEach(cb => { cb.checked = chk.checked; toggleInvSel(cb.value, chk.checked); });
+}
+async function deleteSelectedInvoices() {
+  if (!selectedInvIds.size) return;
+  if (!confirm(`Delete ${selectedInvIds.size} invoice(s) and all linked payments? This cannot be undone.`)) return;
+  for (const id of [...selectedInvIds]) {
+    invoices = invoices.filter(i => i.id !== id);
+    payments = payments.filter(p => p.invoiceId !== id);
+    if (useSupabase) {
+      await sb.from('payments').delete().eq('invoice_id', id).eq('shop_id', currentShopId);
+      await sb.from('invoices').delete().eq('id', id).eq('shop_id', currentShopId);
+    }
+  }
+  selectedInvIds.clear();
+  renderInvoices();
+  renderDashboard();
+}
+
+// ── Invoice list exports ──────────────────────────────────
+function exportInvoicesCSV() {
+  const rows = [['Number','Type','Date','Client','Phone','Departments','Total (KSh)','Paid (KSh)','Balance (KSh)','Status','Payment Method']];
+  _filteredInvoiceRows.forEach(inv => {
+    const depts = [...new Set((inv.items||[]).map(it => { const d=DEPTS.find(x=>x.id===it.dept); return d?d.name:it.dept; }))].join('; ');
+    const type = inv.type==='cash_sale'?'Cash Sale':inv.type==='quotation'?'Quotation':'Invoice';
+    rows.push([inv.id, type, inv.date, inv.clientName||'', inv.clientPhone||'', depts, inv.total, invPaid(inv), invBalance(inv), invStatus(inv), fmtPayMethod(inv.payMethod)]);
+  });
+  const csv = rows.map(r => r.map(v => `"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `invoices-${dateStr()}.csv`; a.click();
+}
+function exportInvoicesXLSX() {
+  if (typeof XLSX === 'undefined') { alert('Excel library not loaded. Please check your connection.'); return; }
+  const data = _filteredInvoiceRows.map(inv => {
+    const depts = [...new Set((inv.items||[]).map(it => { const d=DEPTS.find(x=>x.id===it.dept); return d?d.name:it.dept; }))].join(', ');
+    const type = inv.type==='cash_sale'?'Cash Sale':inv.type==='quotation'?'Quotation':'Invoice';
+    return { 'Number': inv.id, 'Type': type, 'Date': inv.date, 'Client': inv.clientName||'',
+      'Phone': inv.clientPhone||'', 'Departments': depts, 'Total (KSh)': inv.total,
+      'Paid (KSh)': invPaid(inv), 'Balance (KSh)': invBalance(inv),
+      'Status': invStatus(inv), 'Payment Method': fmtPayMethod(inv.payMethod) };
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Invoices');
+  XLSX.writeFile(wb, `invoices-${dateStr()}.xlsx`);
+}
 
 // ── CLIENTS ──────────────────────────────────────────────
 function renderClients() {
@@ -4545,21 +4680,60 @@ function renderClients() {
     (c.email && c.email.toLowerCase().includes(clientSearch.toLowerCase())) ||
     (c.event && c.event.toLowerCase().includes(clientSearch.toLowerCase()))
   );
+  // _filteredClients = ALL matching records (used by exports)
+  _filteredClients = list;
+  selectedClientIds = new Set();
+  const canDelete = hasPerm('clients.delete');
+
+  // Pagination
+  const total = list.length;
+  const perPage = clientsPerPage === 'all' ? total : clientsPerPage;
+  const totalPages = perPage > 0 ? Math.ceil(total / perPage) : 1;
+  if (clientsPage > totalPages) clientsPage = totalPages || 1;
+  const pageList = clientsPerPage === 'all' ? list : list.slice((clientsPage - 1) * perPage, clientsPage * perPage);
+
+  // Pagination controls
+  const pageOpts = [50, 100, 1000, 'all'].map(v =>
+    `<option value="${v}" ${clientsPerPage === v ? 'selected' : ''}>${v === 'all' ? 'All' : v}</option>`
+  ).join('');
+  const pageInfo = clientsPerPage === 'all'
+    ? `All ${total}`
+    : `${Math.min((clientsPage - 1) * perPage + 1, total)}–${Math.min(clientsPage * perPage, total)} of ${total}`;
+  const paginationBar = total > 50 ? `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#f8fafc;border-top:1px solid var(--border);font-size:11px;flex-wrap:wrap">
+      <span style="color:var(--muted)">Rows per page:</span>
+      <select style="font-size:11px;padding:2px 6px;border:1px solid var(--border);border-radius:5px" onchange="clientsPerPage=this.value==='all'?'all':parseInt(this.value);clientsPage=1;renderClients()">${pageOpts}</select>
+      <span style="color:var(--muted);margin-left:4px">${pageInfo}</span>
+      <div style="margin-left:auto;display:flex;gap:4px">
+        <button class="btn btn-sm btn-outline" style="padding:2px 8px" onclick="clientsPage=1;renderClients()" ${clientsPage<=1?'disabled':''} title="First">«</button>
+        <button class="btn btn-sm btn-outline" style="padding:2px 8px" onclick="clientsPage--;renderClients()" ${clientsPage<=1?'disabled':''} title="Prev">‹</button>
+        <span style="padding:2px 8px;font-size:11px;color:var(--muted)">Page ${clientsPage} / ${totalPages}</span>
+        <button class="btn btn-sm btn-outline" style="padding:2px 8px" onclick="clientsPage++;renderClients()" ${clientsPage>=totalPages?'disabled':''} title="Next">›</button>
+        <button class="btn btn-sm btn-outline" style="padding:2px 8px" onclick="clientsPage=${totalPages};renderClients()" ${clientsPage>=totalPages?'disabled':''} title="Last">»</button>
+      </div>
+    </div>` : '';
+
   document.getElementById('page-clients').innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:8px">
-        <div class="search-bar" style="width:260px;margin:0"><i class="ti ti-search"></i><input placeholder="Search clients…" value="${clientSearch}" oninput="clientSearch=this.value;renderClients()"/></div>
-        <span style="font-size:11px;color:var(--muted)">${list.length} client${list.length !== 1 ? 's' : ''}</span>
+        <div class="search-bar" style="width:260px;margin:0"><i class="ti ti-search"></i><input placeholder="Search clients…" value="${clientSearch}" oninput="clientSearch=this.value;clientsPage=1;renderClients()"/></div>
+        <span style="font-size:11px;color:var(--muted)">${total} client${total !== 1 ? 's' : ''}</span>
       </div>
-      ${hasPerm('clients.create') ? `<button class="btn btn-red btn-sm" onclick="openNewClientModal()"><i class="ti ti-plus"></i> Add Client</button>` : ''}
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        ${canDelete ? `<button id="btn-del-clients" class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;display:none" onclick="deleteSelectedClients()"><i class="ti ti-trash"></i> Delete Selected (<span id="sel-client-count">0</span>)</button>` : ''}
+        <button class="btn btn-sm btn-outline" onclick="exportClientsCSV()" title="Export all filtered to CSV"><i class="ti ti-table-export"></i> CSV</button>
+        <button class="btn btn-sm btn-outline" onclick="exportClientsXLSX()" title="Export all filtered to Excel"><i class="ti ti-file-spreadsheet"></i> Excel</button>
+        <button class="btn btn-sm" style="background:#C8252A;color:#fff" onclick="exportClientsPDF()" title="Export all filtered to PDF"><i class="ti ti-file-type-pdf"></i> PDF</button>
+        ${hasPerm('clients.create') ? `<button class="btn btn-red btn-sm" onclick="openNewClientModal()"><i class="ti ti-plus"></i> Add Client</button>` : ''}
+      </div>
     </div>
     <div class="card" style="padding:0;overflow:hidden">
-      ${!list.length
+      ${!total
         ? '<div style="color:var(--muted);font-size:12px;text-align:center;padding:32px">No clients found</div>'
         : `<table class="table" style="width:100%">
             <thead>
               <tr>
-                <th style="width:36px"></th>
+                ${canDelete ? `<th style="width:32px"><input type="checkbox" id="chk-all-clients" onchange="toggleAllClientsSel(this)" title="Select all on this page"/></th>` : '<th style="width:36px"></th>'}
                 <th>Name</th>
                 <th>Phone</th>
                 <th>Email</th>
@@ -4574,7 +4748,7 @@ function renderClients() {
               </tr>
             </thead>
             <tbody>
-              ${list.map(c => {
+              ${pageList.map(c => {
                 const initials = c.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
                 const cInvs = revenueInvoices().filter(i => i.clientPhone === c.phone || i.clientId === c.id);
                 const total = cInvs.reduce((a, i) => a + i.total, 0);
@@ -4583,9 +4757,7 @@ function renderClients() {
                 const referrer = c.referred_by ? clients.find(r => r.referral_code === c.referred_by) : null;
                 const referrerLabel = referrer ? referrer.name : (c.referred_by || '—');
                 return `<tr>
-                  <td>
-                    <div style="width:30px;height:30px;border-radius:50%;background:var(--red);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;color:#fff">${initials}</div>
-                  </td>
+                  <td>${canDelete ? `<input type="checkbox" class="chk-client" value="${c.id}" onchange="toggleClientSel('${c.id}',this.checked)"/>` : `<div style="width:30px;height:30px;border-radius:50%;background:var(--red);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;color:#fff">${initials}</div>`}</td>
                   <td style="font-weight:600">${c.name}</td>
                   <td>${c.phone ? `<a href="tel:${c.phone}" style="color:var(--blue);text-decoration:none">${c.phone}</a>` : '—'}</td>
                   <td style="color:var(--muted)">${c.email || '—'}</td>
@@ -4598,18 +4770,113 @@ function renderClients() {
                   <td style="text-align:center">${cInvs.length}</td>
                   <td style="white-space:nowrap">
                     ${hasPerm('clients.edit') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px" onclick="openEditClient('${c.id}')" title="Edit"><i class="ti ti-pencil" style="font-size:11px"></i></button>` : ''}
-                    ${hasPerm('clients.delete') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5;margin-left:3px" onclick="deleteClient('${c.id}')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>` : ''}
+                    ${canDelete ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5;margin-left:3px" onclick="deleteClient('${c.id}')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>` : ''}
                   </td>
                 </tr>`;
               }).join('')}
             </tbody>
-          </table>`}
+          </table>
+          ${paginationBar}`}
     </div>`;
+}
+
+// ── Client batch-select helpers ───────────────────────────
+function toggleClientSel(id, checked) {
+  if (checked) selectedClientIds.add(id); else selectedClientIds.delete(id);
+  const btn = document.getElementById('btn-del-clients');
+  const cnt = document.getElementById('sel-client-count');
+  if (btn) { btn.style.display = selectedClientIds.size ? '' : 'none'; }
+  if (cnt) cnt.textContent = selectedClientIds.size;
+  const allChk = document.getElementById('chk-all-clients');
+  if (allChk) allChk.indeterminate = selectedClientIds.size > 0 && selectedClientIds.size < _filteredClients.length;
+}
+function toggleAllClientsSel(chk) {
+  document.querySelectorAll('.chk-client').forEach(cb => { cb.checked = chk.checked; toggleClientSel(cb.value, chk.checked); });
+}
+async function deleteSelectedClients() {
+  if (!selectedClientIds.size) return;
+  if (!confirm(`Delete ${selectedClientIds.size} client(s)? This cannot be undone.`)) return;
+  for (const id of [...selectedClientIds]) {
+    clients = clients.filter(c => c.id !== id);
+    if (useSupabase) await sb.from('clients').delete().eq('id', id).eq('shop_id', currentShopId);
+  }
+  selectedClientIds.clear();
+  renderClients();
+}
+
+// ── Client exports ────────────────────────────────────────
+function exportClientsCSV() {
+  const rows = [['Name','Phone','Email','Event','Birthday','Referral Code','Referred By','Total Billed (KSh)','Balance (KSh)','Invoices']];
+  _filteredClients.forEach(c => {
+    const cInvs = revenueInvoices().filter(i => i.clientPhone === c.phone || i.clientId === c.id);
+    const referrer = c.referred_by ? clients.find(r => r.referral_code === c.referred_by) : null;
+    rows.push([c.name, c.phone||'', c.email||'', c.event||'', c.birthday||'', c.referral_code||'',
+      referrer ? referrer.name : (c.referred_by||''),
+      cInvs.reduce((a,i)=>a+i.total,0), cInvs.reduce((a,i)=>a+invBalance(i),0), cInvs.length]);
+  });
+  const csv = rows.map(r => r.map(v => `"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `clients-${dateStr()}.csv`; a.click();
+}
+function exportClientsXLSX() {
+  if (typeof XLSX === 'undefined') { alert('Excel library not loaded. Please check your connection.'); return; }
+  const data = _filteredClients.map(c => {
+    const cInvs = revenueInvoices().filter(i => i.clientPhone === c.phone || i.clientId === c.id);
+    const referrer = c.referred_by ? clients.find(r => r.referral_code === c.referred_by) : null;
+    return { 'Name': c.name, 'Phone': c.phone||'', 'Email': c.email||'', 'Event': c.event||'',
+      'Birthday': c.birthday||'', 'Referral Code': c.referral_code||'',
+      'Referred By': referrer ? referrer.name : (c.referred_by||''),
+      'Total Billed (KSh)': cInvs.reduce((a,i)=>a+i.total,0),
+      'Balance (KSh)': cInvs.reduce((a,i)=>a+invBalance(i),0), 'Invoices': cInvs.length };
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Clients');
+  XLSX.writeFile(wb, `clients-${dateStr()}.xlsx`);
+}
+function exportClientsPDF() {
+  const win = window.open('','_blank','width=900,height=700');
+  if (!win) { alert('Allow popups to export PDF.'); return; }
+  const rows = _filteredClients.map(c => {
+    const cInvs = revenueInvoices().filter(i => i.clientPhone === c.phone || i.clientId === c.id);
+    const total = cInvs.reduce((a,i)=>a+i.total,0);
+    const balance = cInvs.reduce((a,i)=>a+invBalance(i),0);
+    const bdStr = c.birthday ? new Date(c.birthday+'T00:00:00').toLocaleDateString('en-KE',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+    return `<tr><td>${c.name}</td><td>${c.phone||'—'}</td><td>${c.email||'—'}</td><td>${c.event||'—'}</td><td>${bdStr}</td><td style="text-align:right">${fmt(total)}</td><td style="text-align:right;color:${balance>0?'#dc2626':'#16a34a'}">${fmt(balance)}</td><td style="text-align:center">${cInvs.length}</td></tr>`;
+  }).join('');
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Clients Export</title><style>
+    body{font-family:Arial,sans-serif;font-size:11px;margin:20px;color:#1a1a1a}
+    h2{font-size:14px;margin-bottom:4px} p{color:#666;font-size:10px;margin-bottom:14px}
+    table{border-collapse:collapse;width:100%} th,td{border:1px solid #ddd;padding:5px 8px;text-align:left}
+    th{background:#f5f5f3;font-weight:700;font-size:10px;text-transform:uppercase}
+    tr:nth-child(even){background:#fafaf8} @media print{button{display:none}}
+  </style></head><body>
+    <h2>Clients List</h2><p>Exported ${new Date().toLocaleDateString('en-KE',{day:'2-digit',month:'short',year:'numeric'})} &mdash; ${_filteredClients.length} client(s)</p>
+    <table><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Event</th><th>Birthday</th><th style="text-align:right">Billed</th><th style="text-align:right">Balance</th><th style="text-align:center">Inv.</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <br><button onclick="window.print()" style="padding:6px 16px;background:#C8252A;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px">Print / Save as PDF</button>
+  </body></html>`);
+  win.document.close();
+}
+
+function checkClientPhoneDup(phone) {
+  const hint = document.getElementById('cl-phone-dup');
+  if (!hint) return;
+  const editId = document.getElementById('client-modal').dataset.editId || '';
+  const norm = (phone || '').replace(/\s/g, '');
+  if (!norm) { hint.style.display = 'none'; return; }
+  const dup = clients.find(c => c.id !== editId && c.phone && c.phone.replace(/\s/g,'') === norm);
+  if (dup) {
+    hint.style.display = '';
+    hint.innerHTML = '<i class="ti ti-alert-triangle"></i> Phone already registered to <strong>' + dup.name + '</strong>. Search existing clients before adding a new one.';
+  } else {
+    hint.style.display = 'none';
+  }
 }
 
 function openNewClientModal() {
   ['cl-name','cl-phone','cl-email','cl-event','cl-birthday','cl-notes','cl-referredby'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   document.getElementById('cl-refcode-row').style.display = 'none';
+  document.getElementById('cl-phone-dup').style.display = 'none';
   document.getElementById('client-modal').dataset.editId = '';
   openModal('client-modal');
 }
@@ -4633,6 +4900,7 @@ function openEditClient(id) {
     refRow.style.display = 'none';
   }
   document.getElementById('client-modal').dataset.editId = id;
+  document.getElementById('cl-phone-dup').style.display = 'none';
   openModal('client-modal');
 }
 
@@ -4640,8 +4908,17 @@ async function saveClient() {
   const name = document.getElementById('cl-name').value.trim();
   const phone = document.getElementById('cl-phone').value.trim();
   if (!name) { alert('Name is required.'); return; }
+  if (!phone) { alert('Phone number is required.'); return; }
   const modal = document.getElementById('client-modal');
   const editId = modal.dataset.editId || '';
+  // Phone duplicate check on new registration
+  if (!editId && phone) {
+    const norm = phone.replace(/\s/g, '');
+    const dup = clients.find(c => c.phone && c.phone.replace(/\s/g,'') === norm);
+    if (dup) {
+      if (!confirm(`Phone ${phone} is already registered to "${dup.name}".\n\nSave as a separate client anyway?`)) return;
+    }
+  }
   const birthday    = document.getElementById('cl-birthday').value || null;
   const email       = document.getElementById('cl-email').value.trim();
   const event       = document.getElementById('cl-event').value.trim();
@@ -4654,16 +4931,11 @@ async function saveClient() {
       existing.name = name; existing.phone = phone; existing.email = email;
       existing.event = event; existing.birthday = birthday; existing.notes = notes;
       existing.referred_by = referredBy;
-      // Auto-generate referral code when birthday is added for the first time
-      if (birthday && !existing.referral_code) {
-        existing.referral_code = genReferralCode(name);
-      }
+      if (!existing.referral_code) existing.referral_code = genReferralCode(name);
       await dbInsertClient(existing);
     }
   } else {
-    // New client: generate referral code if DOB provided
-    const refCode = birthday ? genReferralCode(name) : null;
-    const c = { id: uid(), name, phone, email, event, birthday, notes, referral_code: refCode, referred_by: referredBy, createdAt: dateStr() };
+    const c = { id: uid(), name, phone, email, event, birthday, notes, referral_code: genReferralCode(name), referred_by: referredBy, createdAt: dateStr() };
     clients.push(c);
     await dbInsertClient(c);
   }
@@ -4789,6 +5061,8 @@ function renderExpenses() {
     );
   }
   list.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  _filteredExpenses = list;
+  selectedExpenseIds = new Set();
 
   const total = list.reduce((s, e) => s + (e.amount || 0), 0);
   const catTotals = {};
@@ -4867,10 +5141,17 @@ function renderExpenses() {
     </div>`;
   }
 
+  const canDelExp = hasPerm('exp.delete');
   el.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
       <span style="color:var(--muted);font-size:12px">Operating costs &amp; cost-of-goods tracking — ${list.length} of ${expenses.length} entries</span>
-      ${hasPerm('exp.create') ? `<button class="btn btn-red btn-sm" onclick="openExpenseModal()"><i class="ti ti-plus"></i> Record Expense</button>` : ''}
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        ${canDelExp ? `<button id="btn-del-exp" class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;display:none" onclick="deleteSelectedExpenses()"><i class="ti ti-trash"></i> Delete Selected (<span id="sel-exp-count">0</span>)</button>` : ''}
+        <button class="btn btn-sm btn-outline" onclick="exportExpensesCSV()" title="Export CSV"><i class="ti ti-table-export"></i> CSV</button>
+        <button class="btn btn-sm btn-outline" onclick="exportExpensesXLSX()" title="Export Excel"><i class="ti ti-file-spreadsheet"></i> Excel</button>
+        <button class="btn btn-sm" style="background:#C8252A;color:#fff" onclick="exportExpensesPDF()" title="Export PDF"><i class="ti ti-file-type-pdf"></i> PDF</button>
+        ${hasPerm('exp.create') ? `<button class="btn btn-red btn-sm" onclick="openExpenseModal()"><i class="ti ti-plus"></i> Record Expense</button>` : ''}
+      </div>
     </div>
 
     <!-- Filter bar -->
@@ -4931,6 +5212,7 @@ function renderExpenses() {
         <table class="table" style="width:100%;min-width:800px">
           <thead>
             <tr>
+              ${canDelExp ? `<th style="width:32px"><input type="checkbox" id="chk-all-exp" onchange="toggleAllExpSel(this)" title="Select all"/></th>` : ''}
               <th>Date</th>
               <th>Department</th>
               <th>Category</th>
@@ -4943,10 +5225,11 @@ function renderExpenses() {
           </thead>
           <tbody>
             ${!list.length
-              ? `<tr><td colspan="8" style="color:var(--muted);text-align:center;padding:22px">No expenses match the current filters.</td></tr>`
+              ? `<tr><td colspan="${canDelExp?9:8}" style="color:var(--muted);text-align:center;padding:22px">No expenses match the current filters.</td></tr>`
               : list.map(e => {
                   const deptObj = DEPTS.find(d => d.id === e.dept);
                   return `<tr>
+                    ${canDelExp ? `<td><input type="checkbox" class="chk-exp" value="${e.id}" onchange="toggleExpSel('${e.id}',this.checked)"/></td>` : ''}
                     <td style="color:var(--muted);font-size:11px">${e.date || '—'}</td>
                     <td>${deptObj ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px"><span style="width:8px;height:8px;border-radius:50%;background:${deptObj.color||'var(--blue)'};display:inline-block"></span>${deptObj.name}</span>` : '<span style="color:var(--muted);font-size:11px">General</span>'}</td>
                     <td><span class="badge ${e.category === COGS_CATEGORY ? 'badge-red' : 'badge-amber'}">${e.category}</span></td>
@@ -4956,7 +5239,7 @@ function renderExpenses() {
                     <td style="text-align:right;font-weight:600;color:#dc2626">${fmt(e.amount)}</td>
                     <td style="white-space:nowrap;text-align:right">
                       ${hasPerm('exp.edit')   ? `<button class="btn btn-sm btn-outline" onclick="openExpenseModal('${e.id}')" title="Edit"><i class="ti ti-pencil"></i></button>` : ''}
-                      ${hasPerm('exp.delete') ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;margin-left:4px" onclick="deleteExpense('${e.id}')" title="Delete"><i class="ti ti-trash"></i></button>` : ''}
+                      ${canDelExp ? `<button class="btn btn-sm" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;margin-left:4px" onclick="deleteExpense('${e.id}')" title="Delete"><i class="ti ti-trash"></i></button>` : ''}
                     </td>
                   </tr>`;
                 }).join('')}
@@ -4964,6 +5247,78 @@ function renderExpenses() {
         </table>
       </div>
     </div>`;
+}
+
+// ── Expense batch-select helpers ──────────────────────────
+function toggleExpSel(id, checked) {
+  if (checked) selectedExpenseIds.add(id); else selectedExpenseIds.delete(id);
+  const btn = document.getElementById('btn-del-exp');
+  const cnt = document.getElementById('sel-exp-count');
+  if (btn) { btn.style.display = selectedExpenseIds.size ? '' : 'none'; }
+  if (cnt) cnt.textContent = selectedExpenseIds.size;
+  const allChk = document.getElementById('chk-all-exp');
+  if (allChk) allChk.indeterminate = selectedExpenseIds.size > 0 && selectedExpenseIds.size < _filteredExpenses.length;
+}
+function toggleAllExpSel(chk) {
+  document.querySelectorAll('.chk-exp').forEach(cb => { cb.checked = chk.checked; toggleExpSel(cb.value, chk.checked); });
+}
+async function deleteSelectedExpenses() {
+  if (!selectedExpenseIds.size) return;
+  if (!confirm(`Delete ${selectedExpenseIds.size} expense(s)? This cannot be undone.`)) return;
+  for (const id of [...selectedExpenseIds]) { expenses = expenses.filter(e => e.id !== id); await dbDeleteExpense(id); }
+  selectedExpenseIds.clear();
+  renderExpenses();
+}
+
+// ── Expense exports ───────────────────────────────────────
+function exportExpensesCSV() {
+  const rows = [['Date','Department','Category','Payee','Method','Note','Amount (KSh)']];
+  _filteredExpenses.forEach(e => {
+    const deptObj = DEPTS.find(d => d.id === e.dept);
+    rows.push([e.date||'', deptObj?deptObj.name:'General', e.category||'', e.payee||'', e.method||'', e.note||'', e.amount||0]);
+  });
+  const totRow = ['','','','','','TOTAL', _filteredExpenses.reduce((s,e)=>s+(e.amount||0),0)];
+  rows.push(totRow);
+  const csv = rows.map(r => r.map(v => `"${String(v??'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['﻿'+csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `expenses-${dateStr()}.csv`; a.click();
+}
+function exportExpensesXLSX() {
+  if (typeof XLSX === 'undefined') { alert('Excel library not loaded. Please check your connection.'); return; }
+  const data = _filteredExpenses.map(e => {
+    const deptObj = DEPTS.find(d => d.id === e.dept);
+    return { 'Date': e.date||'', 'Department': deptObj?deptObj.name:'General',
+      'Category': e.category||'', 'Payee': e.payee||'', 'Method': e.method||'',
+      'Note': e.note||'', 'Amount (KSh)': e.amount||0 };
+  });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), 'Expenses');
+  XLSX.writeFile(wb, `expenses-${dateStr()}.xlsx`);
+}
+function exportExpensesPDF() {
+  const win = window.open('','_blank','width=900,height=700');
+  if (!win) { alert('Allow popups to export PDF.'); return; }
+  const total = _filteredExpenses.reduce((s,e)=>s+(e.amount||0),0);
+  const rows = _filteredExpenses.map(e => {
+    const deptObj = DEPTS.find(d => d.id === e.dept);
+    return `<tr><td>${e.date||'—'}</td><td>${deptObj?deptObj.name:'General'}</td><td>${e.category||'—'}</td><td>${e.payee||'—'}</td><td style="text-transform:capitalize">${e.method||'—'}</td><td style="max-width:200px">${e.note||''}</td><td style="text-align:right;color:#dc2626;font-weight:600">${fmt(e.amount)}</td></tr>`;
+  }).join('');
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Expenses Export</title><style>
+    body{font-family:Arial,sans-serif;font-size:11px;margin:20px;color:#1a1a1a}
+    h2{font-size:14px;margin-bottom:4px} p{color:#666;font-size:10px;margin-bottom:14px}
+    table{border-collapse:collapse;width:100%} th,td{border:1px solid #ddd;padding:5px 8px;text-align:left}
+    th{background:#f5f5f3;font-weight:700;font-size:10px;text-transform:uppercase}
+    tr:nth-child(even){background:#fafaf8} tfoot td{font-weight:700;border-top:2px solid #ddd}
+    @media print{button{display:none}}
+  </style></head><body>
+    <h2>Expenses Report</h2><p>Exported ${new Date().toLocaleDateString('en-KE',{day:'2-digit',month:'short',year:'numeric'})} &mdash; ${_filteredExpenses.length} entr${_filteredExpenses.length===1?'y':'ies'}</p>
+    <table><thead><tr><th>Date</th><th>Department</th><th>Category</th><th>Payee</th><th>Method</th><th>Note</th><th style="text-align:right">Amount</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr><td colspan="6">Total</td><td style="text-align:right;color:#dc2626">${fmt(total)}</td></tr></tfoot>
+    </table>
+    <br><button onclick="window.print()" style="padding:6px 16px;background:#C8252A;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px">Print / Save as PDF</button>
+  </body></html>`);
+  win.document.close();
 }
 
 function openExpenseModal(editId) {
