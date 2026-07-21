@@ -1,0 +1,1602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>EdosPoa — Admin Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{
+  --green:#00A550;--green-dim:rgba(0,165,80,.12);
+  --red:#CE1126;--red-dim:rgba(206,17,38,.1);
+  --amber:#f59e0b;--amber-dim:rgba(245,158,11,.12);
+  --blue:#3b82f6;--blue-dim:rgba(59,130,246,.1);
+  --purple:#8b5cf6;--purple-dim:rgba(139,92,246,.12);
+  --bg:#f0ede6;--surface:#ffffff;--card:#ffffff;
+  --border:rgba(0,0,0,.07);--border2:rgba(0,0,0,.12);
+  --text:#1a1a1a;--muted:#666666;
+  --radius:14px;--radius-sm:8px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;display:flex;overflow-x:hidden}
+
+.sidebar{width:220px;min-height:100vh;background:#f5f2eb;border-right:1px solid rgba(0,0,0,.08);display:flex;flex-direction:column;flex-shrink:0;position:sticky;top:0;height:100vh}
+.brand{padding:1.4rem 1.4rem 1rem;border-bottom:1px solid rgba(0,0,0,.08);display:flex;align-items:center;gap:.6rem}
+.brand-logo{width:32px;height:32px;background:var(--green);border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:800;font-size:.7rem;color:white}
+.brand-name{font-family:'Syne',sans-serif;font-weight:700;font-size:1.05rem;letter-spacing:-.02em}
+.brand-name span{color:var(--green)}
+nav{flex:1;padding:1rem .8rem;display:flex;flex-direction:column;gap:.2rem}
+.nav-item{display:flex;align-items:center;gap:.75rem;padding:.65rem .85rem;border-radius:var(--radius-sm);cursor:pointer;font-size:.88rem;font-weight:500;color:#666;transition:all .15s;border:none;background:none;width:100%;text-align:left}
+.nav-item:hover{background:rgba(0,0,0,.05);color:var(--text)}
+.nav-item.active{background:var(--green-dim);color:var(--green)}
+.nav-item .icon{font-size:1rem;width:18px;text-align:center}
+.sidebar-footer{padding:1rem;border-top:1px solid rgba(0,0,0,.08)}
+.online-badge{display:flex;align-items:center;gap:.5rem;font-size:.78rem;color:#999}
+.online-dot{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{padding:1rem 1.8rem;border-bottom:1px solid rgba(0,0,0,.08);display:flex;align-items:center;justify-content:space-between;background:#ffffff;position:sticky;top:0;z-index:10;gap:.8rem;flex-wrap:wrap}
+.page-title{font-family:'Syne',sans-serif;font-weight:700;font-size:1.15rem;letter-spacing:-.02em}
+.topbar-right{display:flex;align-items:center;gap:.8rem;flex-wrap:wrap}
+.search-box{background:#ffffff;border:1px solid rgba(0,0,0,.12);border-radius:var(--radius-sm);padding:.5rem .9rem;font-size:.85rem;color:var(--text);width:220px;font-family:'DM Sans',sans-serif}
+.search-box::placeholder{color:#999}
+.search-box:focus{outline:none;border-color:var(--green)}
+
+.btn{padding:.55rem 1.1rem;border-radius:var(--radius-sm);border:none;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:.85rem;font-weight:600;transition:all .15s;display:inline-flex;align-items:center;gap:.4rem;white-space:nowrap}
+.btn-green{background:var(--green);color:white}.btn-green:hover{background:#00c261}
+.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border2)}.btn-outline:hover{border-color:var(--green);color:var(--green)}
+.btn-amber{background:var(--amber-dim);color:var(--amber);border:1px solid rgba(245,158,11,.25)}.btn-amber:hover{background:var(--amber);color:white}
+.btn-danger{background:var(--red-dim);color:var(--red);border:1px solid rgba(206,17,38,.2)}.btn-danger:hover{background:var(--red);color:white}
+.btn-blue{background:var(--blue-dim);color:var(--blue);border:1px solid rgba(59,130,246,.25)}.btn-blue:hover{background:var(--blue);color:white}
+.btn-sm{padding:.38rem .75rem;font-size:.78rem}
+.btn-xs{padding:.25rem .6rem;font-size:.72rem}
+.btn:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
+
+.content{padding:1.6rem 1.8rem;flex:1}
+.section{display:none}.section.active{display:block}
+
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.6rem}
+.stat-card{background:#ffffff;border:1px solid rgba(0,0,0,.08);border-radius:var(--radius);padding:1.2rem 1.4rem;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;right:0;width:60px;height:60px;border-radius:0 var(--radius) 0 60px;opacity:.15}
+.stat-card.green::before{background:var(--green)}.stat-card.red::before{background:var(--red)}
+.stat-card.amber::before{background:var(--amber)}.stat-card.blue::before{background:var(--blue)}
+.stat-label{font-size:.75rem;color:var(--muted);font-weight:500;letter-spacing:.04em;text-transform:uppercase;margin-bottom:.5rem}
+.stat-value{font-family:'Syne',sans-serif;font-size:1.9rem;font-weight:800;letter-spacing:-.03em;line-height:1}
+.stat-sub{font-size:.75rem;color:var(--muted);margin-top:.4rem}
+.stat-icon{position:absolute;top:1rem;right:1rem;font-size:1.3rem;opacity:.4}
+
+.table-card{background:#ffffff;border:1px solid rgba(0,0,0,.08);border-radius:var(--radius);overflow:hidden;margin-bottom:1.4rem}
+.table-header{padding:1rem 1.4rem;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(0,0,0,.08);flex-wrap:wrap;gap:.5rem}
+.table-title{font-family:'Syne',sans-serif;font-weight:700;font-size:.95rem}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.85rem;background:#ffffff}
+th{padding:.75rem 1.1rem;text-align:left;font-size:.72rem;font-weight:600;color:#666;letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid rgba(0,0,0,.08);white-space:nowrap;background:#f5f2eb}
+td{padding:.85rem 1.1rem;border-bottom:1px solid rgba(0,0,0,.06);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#faf8f4}
+.client-name-cell{font-weight:600;color:var(--text)}
+.client-email{font-size:.78rem;color:var(--muted);margin-top:.15rem}
+
+.badge{display:inline-flex;align-items:center;gap:.3rem;font-size:.72rem;font-weight:600;padding:.25rem .65rem;border-radius:100px;letter-spacing:.02em}
+.badge-green{background:var(--green-dim);color:var(--green)}
+.badge-red{background:var(--red-dim);color:var(--red)}
+.badge-amber{background:var(--amber-dim);color:var(--amber)}
+.badge-blue{background:var(--blue-dim);color:var(--blue)}
+.badge-purple{background:var(--purple-dim);color:var(--purple)}
+.badge-muted{background:rgba(120,120,120,.1);color:var(--muted)}
+.badge-dot{width:5px;height:5px;border-radius:50%;background:currentColor}
+.plan-basic{background:rgba(120,120,120,.15);color:#777;font-size:.72rem;font-weight:600;padding:.2rem .6rem;border-radius:6px}
+.plan-standard{background:rgba(59,130,246,.15);color:#3b82f6;font-size:.72rem;font-weight:600;padding:.2rem .6rem;border-radius:6px}
+.plan-premium{background:rgba(245,158,11,.15);color:#f59e0b;font-size:.72rem;font-weight:600;padding:.2rem .6rem;border-radius:6px}
+.plan-trial{background:var(--purple-dim);color:var(--purple);font-size:.72rem;font-weight:600;padding:.2rem .6rem;border-radius:6px}
+
+/* Owner-only visibility control */
+.owner-only{display:block}
+.owner-only.hidden{display:none}
+
+.tier-e{background:rgba(0,165,80,.15);color:var(--green);font-size:.65rem;font-weight:800;padding:.15rem .5rem;border-radius:4px;border:1px solid rgba(0,165,80,.2)}
+.tier-s{background:rgba(59,130,246,.15);color:#3b82f6;font-size:.65rem;font-weight:800;padding:.15rem .5rem;border-radius:4px;border:1px solid rgba(59,130,246,.2)}
+.tier-p{background:rgba(245,158,11,.15);color:#f59e0b;font-size:.65rem;font-weight:800;padding:.15rem .5rem;border-radius:4px;border:1px solid rgba(245,158,11,.2)}
+.tier-x{background:var(--purple-dim);color:var(--purple);font-size:.65rem;font-weight:800;padding:.15rem .5rem;border-radius:4px;border:1px solid rgba(139,92,246,.2)}
+
+.action-row{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+
+.loading{display:flex;align-items:center;justify-content:center;padding:3rem;color:#999;gap:.8rem;font-size:.9rem}
+.spinner{width:18px;height:18px;border:2px solid rgba(0,0,0,.12);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty{text-align:center;padding:3rem;color:#999}
+.empty-icon{font-size:2.5rem;margin-bottom:.8rem;opacity:.4}
+
+/* ── MODULES ── */
+.modules-layout{display:grid;grid-template-columns:1fr 1.4fr;gap:1.2rem;align-items:start}
+.mod-library{background:#ffffff;border:1px solid rgba(0,0,0,.08);border-radius:var(--radius);overflow:hidden}
+.mod-lib-header{padding:.9rem 1.2rem;border-bottom:1px solid rgba(0,0,0,.08);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+.mod-lib-title{font-family:'Syne',sans-serif;font-weight:700;font-size:.9rem}
+.mod-lib-search{background:#f5f2eb;border:1px solid rgba(0,0,0,.12);border-radius:var(--radius-sm);padding:.4rem .75rem;font-size:.8rem;color:var(--text);font-family:'DM Sans',sans-serif;width:140px}
+.mod-lib-search::placeholder{color:#999}
+.mod-lib-search:focus{outline:none;border-color:var(--green)}
+.tier-tabs{display:flex;gap:.3rem;padding:.6rem 1rem;border-bottom:1px solid rgba(0,0,0,.08);overflow-x:auto}
+.tier-tab{padding:.3rem .75rem;border-radius:100px;border:1px solid rgba(0,0,0,.12);background:#ffffff;color:#666;font-size:.75rem;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap;transition:all .15s}
+.tier-tab.active{background:var(--green-dim);color:var(--green);border-color:rgba(0,165,80,.3)}
+.mod-list{max-height:480px;overflow-y:auto;padding:.6rem}
+.mod-item{display:flex;align-items:center;gap:.7rem;padding:.65rem .8rem;border-radius:var(--radius-sm);cursor:pointer;transition:background .12s;border:1px solid transparent}
+.mod-item:hover{background:rgba(0,0,0,.04);border-color:rgba(0,0,0,.08)}
+.mod-item.selected{background:var(--green-dim);border-color:rgba(0,165,80,.25)}
+.mod-item-info{flex:1;min-width:0}
+.mod-item-name{font-size:.83rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.mod-item-fee{font-size:.73rem;color:var(--green);margin-top:.1rem}
+.mod-item-check{width:16px;height:16px;border-radius:4px;border:2px solid rgba(0,0,0,.12);background:#ffffff;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:.6rem;color:var(--green);transition:all .15s}
+.mod-item.selected .mod-item-check{background:var(--green);border-color:var(--green);color:white}
+
+.client-sub-panel{background:#ffffff;border:1px solid rgba(0,0,0,.08);border-radius:var(--radius);overflow:hidden}
+.csp-header{padding:.9rem 1.2rem;border-bottom:1px solid rgba(0,0,0,.08);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+.csp-title{font-family:'Syne',sans-serif;font-weight:700;font-size:.9rem}
+.client-picker{background:#f5f2eb;border:1px solid rgba(0,0,0,.12);border-radius:var(--radius-sm);padding:.4rem .75rem;font-size:.82rem;color:var(--text);font-family:'DM Sans',sans-serif;min-width:180px;cursor:pointer}
+.client-picker:focus{outline:none;border-color:var(--green)}
+.client-picker option{background:#ffffff}
+.csp-body{padding:1rem 1.2rem}
+.csp-empty{color:#999;font-size:.85rem;text-align:center;padding:2rem 0}
+
+.assigned-section{margin-bottom:1rem}
+.assigned-label{font-size:.72rem;font-weight:700;color:#999;letter-spacing:.06em;text-transform:uppercase;margin-bottom:.6rem}
+.assigned-chips{display:flex;flex-wrap:wrap;gap:.4rem;min-height:32px}
+.assigned-chip{display:inline-flex;align-items:center;gap:.4rem;background:#f5f2eb;border:1px solid rgba(0,0,0,.12);border-radius:8px;padding:.3rem .6rem .3rem .5rem;font-size:.78rem;font-weight:600;color:var(--text)}
+.assigned-chip.trial-chip{border-color:rgba(245,158,11,.3);background:rgba(245,158,11,.08)}
+.chip-remove{background:none;border:none;cursor:pointer;color:var(--red);font-size:.8rem;padding:0;margin-left:.1rem;line-height:1;opacity:.7;transition:opacity .15s}
+.chip-remove:hover{opacity:1}
+.no-mods{color:#999;font-size:.82rem;font-style:italic}
+
+.assign-controls{background:#f5f2eb;border:1px solid rgba(0,0,0,.08);border-radius:var(--radius-sm);padding:.9rem 1rem;margin-top:.8rem}
+.assign-ctrl-row{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+.assign-sel-count{font-size:.82rem;color:#999;font-weight:600}
+.mini-select{background:#ffffff;border:1px solid rgba(0,0,0,.12);border-radius:var(--radius-sm);padding:.35rem .6rem;font-size:.78rem;color:var(--text);font-family:'DM Sans',sans-serif;cursor:pointer}
+.mini-select:focus{outline:none;border-color:var(--green)}
+.mini-input{background:#ffffff;border:1px solid rgba(0,0,0,.12);border-radius:var(--radius-sm);padding:.35rem .65rem;font-size:.78rem;color:var(--text);font-family:'DM Sans',sans-serif;width:130px}
+.mini-input::placeholder{color:#999}
+.mini-input:focus{outline:none;border-color:var(--green)}
+
+.mrr-bar{display:flex;align-items:center;justify-content:space-between;padding:.6rem 1rem;border-top:1px solid rgba(0,0,0,.08);background:rgba(0,165,80,.04)}
+.mrr-label{font-size:.78rem;color:#999}
+.mrr-value{font-family:'Syne',sans-serif;font-weight:800;font-size:1.1rem;color:var(--green)}
+.preset-strip{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.8rem}
+
+/* ── SEED UI ── */
+.seed-banner{background:linear-gradient(135deg,rgba(0,165,80,.08),rgba(59,130,246,.06));border:1px solid rgba(0,165,80,.2);border-radius:var(--radius);padding:1.2rem 1.4rem;margin-bottom:1.4rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.seed-info{font-size:.85rem;color:var(--text)}
+.seed-info strong{color:var(--green)}
+.seed-actions{display:flex;gap:.6rem;flex-wrap:wrap}
+
+/* ── MODAL ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
+.modal-overlay.open{opacity:1;pointer-events:all}
+.modal{background:#ffffff;border:1px solid rgba(0,0,0,.12);border-radius:20px;width:100%;max-width:480px;padding:2rem;transform:translateY(16px);transition:transform .2s;max-height:90vh;overflow-y:auto}
+.modal-overlay.open .modal{transform:translateY(0)}
+.modal-title{font-family:'Syne',sans-serif;font-weight:700;font-size:1.1rem;margin-bottom:1.4rem;display:flex;justify-content:space-between;align-items:center;color:var(--text)}
+.modal-close{background:none;border:none;color:#999;cursor:pointer;font-size:1.1rem;padding:.2rem}
+.modal-close:hover{color:var(--text)}
+.form-group{margin-bottom:.9rem}
+.form-label{font-size:.75rem;font-weight:600;color:#999;letter-spacing:.04em;text-transform:uppercase;display:block;margin-bottom:.35rem}
+.form-input{width:100%;background:#f5f2eb;border:1px solid rgba(0,0,0,.12);border-radius:var(--radius-sm);padding:.6rem .85rem;font-size:.87rem;color:var(--text);font-family:'DM Sans',sans-serif;transition:border .15s}
+.form-input:focus{outline:none;border-color:var(--green);background:#ffffff}
+.form-input option{background:#ffffff}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:.9rem}
+.modal-actions{display:flex;gap:.7rem;justify-content:flex-end;margin-top:1.4rem;padding-top:1.1rem;border-top:1px solid rgba(0,0,0,.08)}
+
+/* ── CONFIRM ── */
+#confirmBox{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);z-index:300;display:none;align-items:center;justify-content:center}
+#confirmBox.open{display:flex}
+.confirm-inner{background:#ffffff;border:1px solid rgba(0,0,0,.12);border-radius:18px;padding:1.8rem;max-width:340px;width:100%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.15)}
+.confirm-icon{font-size:2.5rem;margin-bottom:.8rem}
+.confirm-title{font-family:'Syne',sans-serif;font-weight:800;font-size:1.05rem;margin-bottom:.5rem;color:var(--text)}
+.confirm-msg{font-size:.85rem;color:#999;line-height:1.5;margin-bottom:1.2rem}
+.confirm-btns{display:flex;gap:.6rem;justify-content:center}
+
+/* ── TOAST ── */
+.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:#ffffff;border:1px solid rgba(0,0,0,.12);border-radius:var(--radius-sm);padding:.75rem 1.1rem;font-size:.85rem;display:flex;align-items:center;gap:.5rem;z-index:999;transform:translateY(80px);opacity:0;transition:all .3s;box-shadow:0 8px 32px rgba(0,0,0,.15);pointer-events:none;color:var(--text)}
+.toast.show{transform:translateY(0);opacity:1}
+.toast.success{border-left:3px solid var(--green)}
+.toast.error{border-left:3px solid var(--red)}
+.toast.warning{border-left:3px solid var(--amber)}
+
+@media(max-width:900px){
+  .stats-row{grid-template-columns:1fr 1fr !important}
+  .sidebar{width:60px}
+  .brand-name,.nav-item span,.online-badge span{display:none}
+  .brand{justify-content:center;padding:1rem}
+  .nav-item{justify-content:center;padding:.65rem}
+  .modules-layout{grid-template-columns:1fr}
+  .search-box{width:160px}
+}
+@media(max-width:640px){
+  body{flex-direction:column}
+  .sidebar{width:100%;height:56px;min-height:unset;position:fixed;bottom:0;top:auto;flex-direction:row;border-right:none;border-top:1px solid rgba(0,0,0,.1);z-index:50;background:#f5f2eb}
+  .brand{display:none}
+  .sidebar-footer{display:none}
+  nav{flex-direction:row;padding:.2rem .3rem;overflow-x:auto;justify-content:space-around;width:100%;gap:0;flex:unset}
+  .nav-item{flex-direction:column;gap:.1rem;padding:.35rem .35rem;justify-content:center;flex:1;min-width:0;width:auto}
+  .nav-item .icon{font-size:1rem;width:auto}
+  .nav-item span{display:block !important;font-size:.55rem;line-height:1;letter-spacing:0}
+  .main{margin-bottom:58px}
+  .topbar{padding:.65rem 1rem;gap:.5rem}
+  .topbar-right{width:100%;flex:1 1 100%}
+  .search-box{width:100% !important}
+  .page-title{font-size:1rem}
+  .content{padding:.9rem}
+  .stats-row{grid-template-columns:1fr 1fr !important}
+  .stat-value{font-size:1.5rem}
+  .stat-card{padding:.9rem 1rem}
+  .dash-grid{grid-template-columns:1fr !important}
+  #seedPreview{grid-template-columns:1fr 1fr !important}
+  .form-row{grid-template-columns:1fr}
+  .modal{max-width:calc(100% - 1.5rem);padding:1.4rem;border-radius:14px}
+  .toast{bottom:68px;right:1rem;left:1rem}
+  .table-header{flex-direction:column;align-items:flex-start}
+  .seed-banner{flex-direction:column}
+  .mod-lib-search{width:110px}
+  .client-picker{min-width:140px}
+}
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-logo">EP</div>
+    <div class="brand-name">Edos<span>Poa</span></div>
+  </div>
+  <nav>
+    <button class="nav-item active" onclick="showSection('dashboard',this)"><span class="icon">📊</span><span>Dashboard</span></button>
+    <button class="nav-item" onclick="showSection('clients',this)"><span class="icon">🏪</span><span>Clients</span></button>
+    <button class="nav-item" onclick="showSection('invoices',this)"><span class="icon">🧾</span><span>Invoices</span></button>
+    <button class="nav-item" onclick="showSection('modules',this)"><span class="icon">🧩</span><span>Modules</span></button>
+    <button class="nav-item" onclick="showSection('staff',this)"><span class="icon">👥</span><span>Staff Users</span></button>
+    <button class="nav-item" onclick="showSection('seed',this)"><span class="icon">🌱</span><span>Seed Data</span></button>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="online-badge"><span class="online-dot" id="onlineDot"></span><span id="syncStatus">Live</span></div>
+  </div>
+</aside>
+
+<div class="main">
+  <div class="topbar">
+    <div class="page-title" id="pageTitle">Dashboard</div>
+    <div class="topbar-right">
+      <input class="search-box" type="text" placeholder="Search clients…" id="searchInput" oninput="filterClients()" style="display:none"/>
+      <button class="btn btn-green" id="onboardBtn" onclick="openOnboardModal()" style="display:none">+ Onboard Client</button>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- DASHBOARD -->
+    <div class="section active" id="section-dashboard">
+      <div class="stats-row">
+        <div class="stat-card green"><div class="stat-icon">🏪</div><div class="stat-label">Total Clients</div><div class="stat-value" id="stat-total">—</div><div class="stat-sub">All onboarded</div></div>
+        <div class="stat-card green"><div class="stat-icon">✅</div><div class="stat-label">Active</div><div class="stat-value" id="stat-active">—</div><div class="stat-sub">Currently subscribed</div></div>
+        <div class="stat-card amber"><div class="stat-icon">🔁</div><div class="stat-label">Trial</div><div class="stat-value" id="stat-trial">—</div><div class="stat-sub">Free trial</div></div>
+        <div class="stat-card red"><div class="stat-icon">⏸</div><div class="stat-label">Suspended</div><div class="stat-value" id="stat-suspended">—</div><div class="stat-sub">Overdue or paused</div></div>
+      </div>
+      <div class="stats-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:1.4rem">
+        <div class="stat-card blue owner-only"><div class="stat-icon">💰</div><div class="stat-label">Monthly MRR</div><div class="stat-value" id="dash-mrr">—</div><div class="stat-sub">Active subscriptions</div></div>
+        <div class="stat-card green"><div class="stat-icon">🧩</div><div class="stat-label">Active Subscriptions</div><div class="stat-value" id="dash-subs">—</div><div class="stat-sub">Module assignments</div></div>
+        <div class="stat-card amber"><div class="stat-icon">📊</div><div class="stat-label">Avg per Client</div><div class="stat-value" id="dash-avg">—</div><div class="stat-sub">Revenue per client</div></div>
+      </div>
+      <div class="dash-grid" style="display:grid;grid-template-columns:1.5fr 1fr;gap:1rem;margin-bottom:1.4rem">
+        <div class="table-card">
+          <div class="table-header"><span class="table-title">Recent Clients</span><button class="btn btn-outline btn-sm" onclick="navTo('clients')">View all →</button></div>
+          <div id="recentClientsTable"><div class="loading"><div class="spinner"></div>Loading…</div></div>
+        </div>
+        <div class="table-card">
+          <div class="table-header"><span class="table-title">Invoice Summary</span></div>
+          <div style="padding:1.2rem 1.4rem" id="invoiceSummary"><div class="loading"><div class="spinner"></div></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CLIENTS -->
+    <div class="section" id="section-clients">
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">All Clients</span>
+          <span id="clientCount" style="font-size:.8rem;color:var(--muted)"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Business</th><th>Plan</th><th>Phone</th><th>Location</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
+            <tbody id="clientsTableBody"><tr><td colspan="7"><div class="loading"><div class="spinner"></div>Loading…</div></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- INVOICES -->
+    <div class="section" id="section-invoices">
+      <div class="table-card">
+        <div class="table-header"><span class="table-title">Invoices</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Invoice #</th><th>Client</th><th>Type</th><th>Amount (KES)</th><th>Status</th><th>Due Date</th><th>Notes</th></tr></thead>
+            <tbody id="invoicesTableBody"><tr><td colspan="7"><div class="loading"><div class="spinner"></div>Loading…</div></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODULES -->
+    <div class="section" id="section-modules">
+      <div class="stats-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:1.2rem">
+        <div class="stat-card blue"><div class="stat-icon">🧩</div><div class="stat-label">Total Modules</div><div class="stat-value" id="mod-total">—</div></div>
+        <div class="stat-card green"><div class="stat-icon">🔗</div><div class="stat-label">Active Subscriptions</div><div class="stat-value" id="mod-subs">—</div></div>
+        <div class="stat-card blue owner-only"><div class="stat-icon">💰</div><div class="stat-label">Monthly MRR (KES)</div><div class="stat-value" id="mod-mrr">—</div></div>
+      </div>
+
+      <div class="modules-layout">
+        <!-- LEFT: Module Library -->
+        <div class="mod-library">
+          <div class="mod-lib-header">
+            <span class="mod-lib-title">🧩 Module Library</span>
+            <input class="mod-lib-search" id="modSearch" placeholder="Search…" oninput="renderModLib()"/>
+          </div>
+          <div class="tier-tabs" id="tierTabs">
+            <button class="tier-tab active" data-tier="All" onclick="setTierFilter('All',this)">All</button>
+            <button class="tier-tab" data-tier="ESSENTIAL" onclick="setTierFilter('ESSENTIAL',this)">Essential</button>
+            <button class="tier-tab" data-tier="STANDARD" onclick="setTierFilter('STANDARD',this)">Standard</button>
+            <button class="tier-tab" data-tier="PREMIUM" onclick="setTierFilter('PREMIUM',this)">Premium</button>
+            <button class="tier-tab" data-tier="SPECIALTY" onclick="setTierFilter('SPECIALTY',this)">Specialty</button>
+          </div>
+          <div class="mod-list" id="modList"><div class="loading"><div class="spinner"></div>Loading…</div></div>
+          <div style="padding:.6rem 1rem;border-top:1px solid var(--border);font-size:.75rem;color:var(--muted)">
+            Click modules to select · then assign to client →
+          </div>
+        </div>
+
+        <!-- RIGHT: Client Subscription Manager -->
+        <div class="client-sub-panel">
+          <div class="csp-header">
+            <span class="csp-title">🏪 Client Subscriptions</span>
+            <select class="client-picker" id="clientPicker" onchange="onClientPick()">
+              <option value="">— Pick a client —</option>
+            </select>
+          </div>
+          <div class="csp-body" id="cspBody">
+            <div class="csp-empty">Select a client above to manage their modules</div>
+          </div>
+          <div class="mrr-bar owner-only" id="mrrBar" style="display:none">
+            <span class="mrr-label">Monthly subscription total</span>
+            <span class="mrr-value" id="mrrValue">KES 0</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STAFF USERS -->
+    <div class="section" id="section-staff">
+      <div class="stats-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:1.2rem" id="staff-stats-row">
+        <div class="stat-card green"><div class="stat-icon">👥</div><div class="stat-label">Total Staff</div><div class="stat-value" id="staff-total">—</div></div>
+        <div class="stat-card blue"><div class="stat-icon">✅</div><div class="stat-label">Active</div><div class="stat-value" id="staff-active">—</div></div>
+        <div class="stat-card amber"><div class="stat-icon">🏪</div><div class="stat-label">Shops with Staff</div><div class="stat-value" id="staff-shops">—</div></div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">👥 All Staff Users — All Shops</span>
+          <div style="display:flex;gap:.6rem;align-items:center">
+            <select id="staff-client-filter" class="search-box" style="width:220px" onchange="renderAdminStaff()">
+              <option value="">— All Clients —</option>
+            </select>
+            <button class="btn btn-green btn-sm" onclick="openAdminAddStaffModal()">+ Add Staff</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Shop / Client</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+            <tbody id="staff-table-body"><tr><td colspan="7"><div class="loading"><div class="spinner"></div>Loading…</div></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SEED DATA -->
+    <div class="section" id="section-seed">
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">🌱 Seed — Mejason POS Modules + Client</span>
+        </div>
+        <div style="padding:1.4rem">
+          <div class="seed-banner">
+            <div class="seed-info">
+              <strong>One-click setup</strong> — seeds all 15 Mejason POS modules into <code>pos_modules</code>
+              and creates <strong>Mejason Media Production</strong> as a Premium client with all modules assigned.
+            </div>
+            <div class="seed-actions">
+              <button class="btn btn-green" onclick="seedModules()">🧩 Seed Modules</button>
+              <button class="btn btn-blue" onclick="seedMejazonClient()">🏪 Seed Mejason Client</button>
+              <button class="btn btn-amber" onclick="seedAll()">⚡ Seed Everything</button>
+              <button class="btn btn-danger" onclick="nukeAndReseedModules()" title="Wipe wrong modules and re-seed correctly">🔄 Reset & Reseed Modules</button>
+            </div>
+          </div>
+
+          <div style="margin-bottom:1.4rem">
+            <div class="table-title" style="margin-bottom:.8rem">📋 Modules that will be seeded</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem" id="seedPreview">
+              <!-- filled by JS -->
+            </div>
+          </div>
+
+          <div id="seedLog" style="background:#f5f2eb;border-radius:var(--radius-sm);padding:1rem;font-size:.8rem;font-family:monospace;color:#555;min-height:60px;max-height:260px;overflow-y:auto;white-space:pre-wrap">Seed log will appear here…</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ONBOARD CLIENT MODAL -->
+<div class="modal-overlay" id="onboardModal">
+  <div class="modal">
+    <div class="modal-title">Onboard New Client<button class="modal-close" onclick="closeOverlay('onboardModal')">✕</button></div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Business Name *</label><input class="form-input" id="f-business" placeholder="e.g. Mama Pima Shop"/></div>
+      <div class="form-group"><label class="form-label">Owner Name</label><input class="form-input" id="f-owner" placeholder="Full name"/></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Email *</label><input class="form-input" id="f-email" type="email" placeholder="owner@business.co.ke"/></div>
+      <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="f-phone" placeholder="07XX XXX XXX"/></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Plan</label>
+        <select class="form-input" id="f-plan">
+          <option value="basic">Basic — KES 1,500/mo</option>
+          <option value="standard" selected>Standard — KES 4,500/mo</option>
+          <option value="premium">Premium — KES 10,000/mo</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Status</label>
+        <select class="form-input" id="f-status"><option value="trial">Trial</option><option value="active">Active</option></select>
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Location</label><input class="form-input" id="f-location" placeholder="e.g. Nairobi, Westlands"/></div>
+    <div class="form-group"><label class="form-label">Notes</label><input class="form-input" id="f-notes" placeholder="Any additional notes…"/></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeOverlay('onboardModal')">Cancel</button>
+      <button class="btn btn-green" id="onboardSaveBtn" onclick="addClient()">Onboard Client</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODULE SCRIPT EDITOR MODAL -->
+<div class="modal-overlay" id="moduleScriptModal">
+  <div class="modal" style="max-width:660px;width:90vw">
+    <div class="modal-title">
+      ✏️ Module Script Editor — <span id="mse-name" style="color:var(--green)"></span>
+      <button class="modal-close" onclick="closeOverlay('moduleScriptModal')">✕</button>
+    </div>
+    <div style="display:grid;gap:.9rem;padding:.25rem 0 .5rem">
+      <div class="form-group">
+        <label class="form-label">Description / Internal Notes</label>
+        <textarea class="form-input" id="mse-notes" rows="3"
+          placeholder="Internal notes about this module, known issues, client-specific instructions…"
+          style="resize:vertical;font-size:.82rem"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Custom Config (JSON)</label>
+        <textarea class="form-input" id="mse-config" rows="5"
+          placeholder='{"mpesaPaybill":"400200","tillNumber":"123456","featureFlag":true}'
+          style="resize:vertical;font-family:monospace;font-size:.78rem"></textarea>
+        <div style="font-size:.7rem;color:var(--muted);margin-top:3px">
+          Key/value settings specific to this module for this client (valid JSON only)
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Webhook / Integration URL</label>
+        <input class="form-input" id="mse-webhook"
+          placeholder="https://hook.make.com/your-module-hook"
+          style="font-size:.82rem"/>
+        <div style="font-size:.7rem;color:var(--muted);margin-top:3px">
+          Make, Zapier, or custom webhook called when this module performs key actions
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Custom Script (JavaScript — advanced)</label>
+        <textarea class="form-input" id="mse-script" rows="9"
+          placeholder="// Custom initialization code for this module&#10;// Runs when the module loads in the Mejason POS&#10;// Available globals: window.MEJASON_CONFIG, currentUser, sb (Supabase client)&#10;&#10;// Example: override M-Pesa paybill from config&#10;// if (window.MEJASON_CONFIG) {&#10;//   window.MPESA_PAYBILL = MEJASON_CONFIG.mpesaPaybill;&#10;// }"
+          style="resize:vertical;font-family:monospace;font-size:.75rem;line-height:1.6"></textarea>
+        <div style="font-size:.7rem;color:var(--muted);margin-top:3px">
+          ⚠️ Advanced — runs in the client's POS context. Test thoroughly before deploying.
+        </div>
+      </div>
+    </div>
+    <div id="mse-status" style="font-size:.78rem;margin-bottom:.5rem;min-height:16px;text-align:center"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeOverlay('moduleScriptModal')">Cancel</button>
+      <button class="btn btn-green" id="mse-save-btn" onclick="saveModuleScript()">💾 Save Script</button>
+    </div>
+    <div style="margin-top:1rem;background:#f5f2eb;border-radius:var(--radius-sm);padding:.8rem 1rem;font-size:.73rem;color:var(--muted);line-height:1.7">
+      <strong>SQL to run once in Supabase before using this editor:</strong><br>
+      <code style="font-size:.7rem;background:#e8e4dc;border-radius:4px;padding:2px 5px;display:block;margin-top:5px;white-space:pre-wrap">create table if not exists module_scripts (
+  module_id text primary key references pos_modules(id) on delete cascade,
+  notes text, config text, webhook_url text, custom_script text,
+  updated_at timestamptz default now()
+);
+alter table module_scripts enable row level security;
+create policy "allow all" on module_scripts for all using (true) with check (true);</code>
+    </div>
+  </div>
+</div>
+
+<div id="confirmBox">
+  <div class="confirm-inner">
+    <div class="confirm-icon" id="ci-icon">⚠️</div>
+    <div class="confirm-title" id="ci-title"></div>
+    <div class="confirm-msg" id="ci-msg"></div>
+    <div class="confirm-btns">
+      <button class="btn btn-outline btn-sm" onclick="confirmResolve(false)">Cancel</button>
+      <button class="btn btn-danger btn-sm" id="ci-ok" onclick="confirmResolve(true)">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── SUPABASE ──────────────────────────────────────────────────
+const { createClient } = supabase;
+const SB = createClient(
+  'https://cnlyuwslpcgosgwdmzav.supabase.co',
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNubHl1d3NscGNnb3Nnd2RtemF2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgyMjIxMjUsImV4cCI6MjA5Mzc5ODEyNX0.eYYuQLqWWLf61JFE0BpDqDu9LB7cX4CoW6E1P5xmMto'
+);
+
+// ── GLOBAL STATE ──────────────────────────────────────────────
+let allClients   = [];
+let allModules   = [];
+let allSubs      = [];
+let tierFilter   = 'All';
+let selectedMods = new Set();
+let activeClientId = '';
+let isOwner      = false;  // Track if current user is owner
+
+// ── MEJASON POS MODULE DEFINITIONS ───────────────────────────
+// Categorized from Mejason POS source into 4 tiers
+const MEJASON_MODULES = [
+  // ─── ESSENTIAL (core POS, every client needs these) ───────
+  {
+    id: 'mod-pos-sales',
+    name: 'POS Sales Terminal',
+    category: 'Sales',
+    tier: 'ESSENTIAL',
+    monthly_fee: 1500,
+    description: 'Full cart-based POS with service catalogue, custom items, qty control, discounts, and multi-dept filtering.',
+    is_active: true,
+    sort_order: 1
+  },
+  {
+    id: 'mod-pos-invoicing',
+    name: 'Invoicing & Receipts',
+    category: 'Finance',
+    tier: 'ESSENTIAL',
+    monthly_fee: 1000,
+    description: 'PDF invoice + thermal receipt generation, download, and print. Includes client bill-to details and payment notes.',
+    is_active: true,
+    sort_order: 2
+  },
+  {
+    id: 'mod-pos-clients',
+    name: 'Client Records',
+    category: 'CRM',
+    tier: 'ESSENTIAL',
+    monthly_fee: 500,
+    description: 'Client database with phone, email, event type, notes. Auto-create on first sale. Search and history tracking.',
+    is_active: true,
+    sort_order: 3
+  },
+  {
+    id: 'mod-pos-dashboard',
+    name: 'Business Dashboard',
+    category: 'Reporting',
+    tier: 'ESSENTIAL',
+    monthly_fee: 500,
+    description: 'Real-time stats: total billed, collected, outstanding, today\'s sales. Recent transactions and dept revenue bars.',
+    is_active: true,
+    sort_order: 4
+  },
+
+  // ─── STANDARD (financial depth + management) ──────────────
+  {
+    id: 'mod-pos-payments',
+    name: 'Credit & Payments',
+    category: 'Finance',
+    tier: 'STANDARD',
+    monthly_fee: 1000,
+    description: 'Credit sales, partial payment recording, balance tracking, payment history per invoice, mark-fully-paid.',
+    is_active: true,
+    sort_order: 5
+  },
+  {
+    id: 'mod-pos-analytics',
+    name: 'Analytics & Reports',
+    category: 'Reporting',
+    tier: 'STANDARD',
+    monthly_fee: 1500,
+    description: 'Period-based revenue charts (day/week/month/quarter/year), dept breakdown, top clients, payment method split.',
+    is_active: true,
+    sort_order: 6
+  },
+  {
+    id: 'mod-pos-inventory',
+    name: 'Equipment Inventory',
+    category: 'Operations',
+    tier: 'STANDARD',
+    monthly_fee: 800,
+    description: 'Stock tracking for cameras, drones, lights, flash disks, photobooks. Availability and utilization bars.',
+    is_active: true,
+    sort_order: 7
+  },
+  {
+    id: 'mod-pos-services',
+    name: 'Service Catalogue Manager',
+    category: 'Operations',
+    tier: 'STANDARD',
+    monthly_fee: 700,
+    description: 'Add, edit, delete services across 8 departments. Dept filter, bulk pricing, search. Live sync to POS terminal.',
+    is_active: true,
+    sort_order: 8
+  },
+  {
+    id: 'mod-pos-expenses',
+    name: 'Expenses & Profitability',
+    category: 'Finance',
+    tier: 'STANDARD',
+    monthly_fee: 900,
+    description: 'Record operating expenses and Cost-of-Goods entries by category. Unlocks Gross Profit & Net Profit cards on dashboard and analytics, plus expense breakdown in CSV/Excel/PDF exports.',
+    is_active: true,
+    sort_order: 9
+  },
+
+  // ─── PREMIUM (automation + integrations) ──────────────────
+  {
+    id: 'mod-pos-mpesa',
+    name: 'M-Pesa STK Push',
+    category: 'Payments',
+    tier: 'PREMIUM',
+    monthly_fee: 2000,
+    description: 'Safaricom Daraja STK push integration. Paybill + till support, real-time PIN confirmation, sandbox+live modes.',
+    is_active: true,
+    sort_order: 10
+  },
+  {
+    id: 'mod-pos-email',
+    name: 'Email Invoice Delivery',
+    category: 'Communications',
+    tier: 'PREMIUM',
+    monthly_fee: 1500,
+    description: 'Auto-generate PDF and email invoice to client on checkout. html2pdf rendering, Netlify function backend.',
+    is_active: true,
+    sort_order: 11
+  },
+  {
+    id: 'mod-pos-whatsapp',
+    name: 'WhatsApp Invoice Delivery',
+    category: 'Communications',
+    tier: 'PREMIUM',
+    monthly_fee: 1500,
+    description: 'Send PDF invoice via WhatsApp Business API with fallback to WA Web link. Auto-formatted message template.',
+    is_active: true,
+    sort_order: 12
+  },
+  {
+    id: 'mod-pos-users',
+    name: 'Staff Users & Access Control',
+    category: 'Administration',
+    tier: 'PREMIUM',
+    monthly_fee: 1000,
+    description: 'Multi-user login (admin/manager/cashier), granular permission matrix, add/edit/delete staff, role editor.',
+    is_active: true,
+    sort_order: 13
+  },
+
+  // ─── SPECIALTY (media-specific add-ons) ───────────────────
+  {
+    id: 'mod-pos-depts',
+    name: 'Media Department Setup',
+    category: 'Configuration',
+    tier: 'SPECIALTY',
+    monthly_fee: 500,
+    description: 'Pre-configured 8 media departments: Wedding, Traditional, Graduation, Corporate, Studio, Editing, Equipment, Passport/ID.',
+    is_active: true,
+    sort_order: 14
+  },
+  {
+    id: 'mod-pos-settings',
+    name: 'Business Settings & Branding',
+    category: 'Configuration',
+    tier: 'SPECIALTY',
+    monthly_fee: 500,
+    description: 'Business info, KCB bank details, M-Pesa paybill/till/account config, social media links, invoice footer branding.',
+    is_active: true,
+    sort_order: 15
+  }
+];
+
+// Mejason Media Production — the actual client record
+const MEJASON_CLIENT = {
+  id: 'client-1778569091064',
+  name: 'Mejason Media Production',
+  email: 'mejasanw@gmail.com',
+  phone: '0700864849',
+  event: 'premium',
+  notes: 'Kisumu, Joventure Hotel 1st Floor · Media Production Studio',
+  status: 'active',
+  created_at: new Date().toISOString()
+};
+
+// ── UTILS ─────────────────────────────────────────────────────
+const fmt   = n => 'KES ' + Number(n).toLocaleString('en-KE',{minimumFractionDigits:0});
+const fmtK  = n => n>=1e6?(n/1e6).toFixed(1)+'M':n>=1000?(n/1000).toFixed(1)+'K':String(Math.round(n));
+const fdate = d => d ? new Date(d).toLocaleDateString('en-KE',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+const esc   = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const TIER_CLS = {ESSENTIAL:'tier-e',STANDARD:'tier-s',PREMIUM:'tier-p',SPECIALTY:'tier-x'};
+const PLAN_TIERS = {basic:['ESSENTIAL'],standard:['ESSENTIAL','STANDARD'],premium:['ESSENTIAL','STANDARD','PREMIUM'],trial:['ESSENTIAL']};
+
+// ── TOAST ─────────────────────────────────────────────────────
+let _tt;
+function toast(msg,type='success'){
+  const el=document.getElementById('toast');
+  el.textContent=(type==='success'?'✅ ':type==='error'?'❌ ':'⚠️ ')+msg;
+  el.className='toast show '+type;
+  clearTimeout(_tt);_tt=setTimeout(()=>el.className='toast',3500);
+}
+
+// ── CONFIRM ───────────────────────────────────────────────────
+let _cr=null;
+function confirm2(icon,title,msg,okTxt='Confirm',okCls='btn-danger'){
+  document.getElementById('ci-icon').textContent=icon;
+  document.getElementById('ci-title').textContent=title;
+  document.getElementById('ci-msg').textContent=msg;
+  const ok=document.getElementById('ci-ok');
+  ok.textContent=okTxt; ok.className='btn btn-sm '+okCls;
+  document.getElementById('confirmBox').classList.add('open');
+  return new Promise(r=>_cr=r);
+}
+function confirmResolve(v){document.getElementById('confirmBox').classList.remove('open');if(_cr){_cr(v);_cr=null;}}
+
+// ── ONLINE ────────────────────────────────────────────────────
+window.addEventListener('offline',()=>{document.getElementById('onlineDot').style.background='var(--amber)';document.getElementById('syncStatus').textContent='Offline';});
+window.addEventListener('online', ()=>{document.getElementById('onlineDot').style.background='var(--green)';document.getElementById('syncStatus').textContent='Live';init();});
+
+// ── NAVIGATION ────────────────────────────────────────────────
+function showSection(id,btn){
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('section-'+id).classList.add('active');
+  if(btn) btn.classList.add('active');
+  document.getElementById('pageTitle').textContent={dashboard:'Dashboard',clients:'Clients',invoices:'Invoices',modules:'Module Manager',staff:'Staff Users',seed:'Seed Data'}[id];
+  document.getElementById('searchInput').style.display  = id==='clients'?'block':'none';
+  document.getElementById('onboardBtn').style.display   = id==='clients'?'flex':'none';
+  if(id==='seed') renderSeedPreview();
+  if(id==='staff') renderAdminStaff();
+}
+function navTo(id){
+  const btns=document.querySelectorAll('.nav-item');
+  const map={dashboard:0,clients:1,invoices:2,modules:3,seed:4};
+  showSection(id,btns[map[id]]);
+}
+
+// ── BADGES ────────────────────────────────────────────────────
+function statusBadge(s){const m={active:'green',trial:'amber',suspended:'red',inactive:'muted'};return `<span class="badge badge-${m[s]||'muted'}"><span class="badge-dot"></span>${s}</span>`;}
+function invoiceBadge(s){const m={paid:'green',pending:'amber',overdue:'red',cancelled:'muted'};return `<span class="badge badge-${m[s]||'muted'}">${s}</span>`;}
+function planChip(p){const cls={basic:'plan-basic',standard:'plan-standard',premium:'plan-premium',trial:'plan-trial'};return `<span class="${cls[p]||'plan-basic'}">${(p||'basic').charAt(0).toUpperCase()+(p||'basic').slice(1)}</span>`;}
+
+// ── OWNER AUTHORIZATION ───────────────────────────────────────
+async function checkOwnerStatus(){
+  try {
+    const { data: { user } } = await SB.auth.getUser();
+    if(!user) return false;
+    
+    // Check if user is owner in pos_staff table
+    const { data: staff } = await SB.from('pos_staff')
+      .select('role')
+      .eq('user_id', user.id)
+      .single();
+    
+    isOwner = staff?.role === 'owner';
+    updateMRRVisibility();
+    return isOwner;
+  } catch(e) {
+    console.log('Owner check: using guest access');
+    isOwner = false;
+    updateMRRVisibility();
+    return false;
+  }
+}
+
+function updateMRRVisibility(){
+  const mrrElements = document.querySelectorAll('.stat-card.blue');
+  mrrElements.forEach(el => {
+    if(el.querySelector('#dash-mrr') || el.querySelector('#mod-mrr')) {
+      el.classList.toggle('hidden', !isOwner);
+    }
+  });
+  const mrrBar = document.getElementById('mrrBar');
+  if(mrrBar) mrrBar.classList.toggle('hidden', !isOwner);
+}
+
+// ── LOAD ALL DATA ─────────────────────────────────────────────
+async function init(){
+  await checkOwnerStatus();
+  
+  const [cr,mr,sr,ir]=await Promise.all([
+    SB.from('clients').select('*').order('created_at',{ascending:false}),
+    SB.from('pos_modules').select('*').order('sort_order').order('tier').order('name'),
+    SB.from('client_subscriptions').select('*'),
+    SB.from('pos_invoices').select('amount,status'),
+  ]);
+  allClients = cr.data||[];
+  allModules = mr.data||[];
+  allSubs    = sr.data||[];
+
+  renderStats();
+  renderRecentClients();
+  renderInvoiceSummary(ir.data||[]);
+  renderClientsTable();
+  renderInvoicesTable();
+  populateClientPicker();
+  renderModLib();
+  renderModStats();
+}
+
+// ── DASHBOARD ─────────────────────────────────────────────────
+function renderStats(){
+  document.getElementById('stat-total').textContent     = allClients.length;
+  document.getElementById('stat-active').textContent    = allClients.filter(c=>c.status==='active').length;
+  document.getElementById('stat-trial').textContent     = allClients.filter(c=>c.status==='trial').length;
+  document.getElementById('stat-suspended').textContent = allClients.filter(c=>c.status==='suspended').length;
+  updateDashboardMRR();
+}
+
+function updateDashboardMRR(){
+  const activeSubs=allSubs.filter(s=>['active','trial'].includes(s.status));
+  const mrr=activeSubs.reduce((sum,s)=>{
+    const m=allModules.find(x=>x.id===s.module_id);
+    return sum+Number(s.custom_fee||m?.monthly_fee||0);
+  },0);
+  const activeClients=allClients.filter(c=>c.status==='active').length;
+  const avgPerClient=activeClients>0?mrr/activeClients:0;
+  document.getElementById('dash-mrr').textContent = fmtK(mrr);
+  document.getElementById('dash-subs').textContent = activeSubs.length;
+  document.getElementById('dash-avg').textContent = fmt(avgPerClient).replace('KES ','');
+}
+
+function renderRecentClients(){
+  const list=allClients.slice(0,5);
+  if(!list.length){document.getElementById('recentClientsTable').innerHTML='<div class="empty"><div class="empty-icon">🏪</div>No clients yet</div>';return;}
+  document.getElementById('recentClientsTable').innerHTML=`<table style="width:100%">
+    <thead><tr><th>Business</th><th>Plan</th><th>Status</th><th>Joined</th></tr></thead>
+    <tbody>${list.map(c=>`<tr>
+      <td><div class="client-name-cell">${esc(c.name||'—')}</div><div class="client-email">${esc(c.email||'')}</div></td>
+      <td>${planChip(c.event)}</td><td>${statusBadge(c.status)}</td><td style="color:var(--muted);font-size:.8rem">${fdate(c.created_at)}</td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+function renderInvoiceSummary(data){
+  const paid=data.filter(i=>i.status==='paid').reduce((s,i)=>s+Number(i.amount),0);
+  const pend=data.filter(i=>i.status==='pending').reduce((s,i)=>s+Number(i.amount),0);
+  const over=data.filter(i=>i.status==='overdue').reduce((s,i)=>s+Number(i.amount),0);
+  document.getElementById('invoiceSummary').innerHTML=`
+    <div style="display:flex;flex-direction:column;gap:.85rem">
+      <div style="display:flex;justify-content:space-between"><span style="font-size:.82rem;color:var(--muted)">💰 Collected</span><span style="font-weight:700;color:var(--green)">${fmt(paid)}</span></div>
+      <div style="display:flex;justify-content:space-between"><span style="font-size:.82rem;color:var(--muted)">⏳ Pending</span><span style="font-weight:700;color:var(--amber)">${fmt(pend)}</span></div>
+      <div style="display:flex;justify-content:space-between"><span style="font-size:.82rem;color:var(--muted)">🔴 Overdue</span><span style="font-weight:700;color:var(--red)">${fmt(over)}</span></div>
+      <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);padding-top:.7rem">
+        <span style="font-size:.82rem;font-weight:600">Total</span>
+        <span style="font-weight:800;font-family:'Syne',sans-serif">${fmt(paid+pend+over)}</span>
+      </div>
+    </div>`;
+}
+
+// ── CLIENTS TABLE ─────────────────────────────────────────────
+function renderClientsTable(){
+  const data=allClients;
+  document.getElementById('clientCount').textContent=`${data.length} client${data.length!==1?'s':''}`;
+  if(!data.length){document.getElementById('clientsTableBody').innerHTML=`<tr><td colspan="7"><div class="empty"><div class="empty-icon">🏪</div>No clients</div></td></tr>`;return;}
+  document.getElementById('clientsTableBody').innerHTML=data.map(c=>`
+    <tr>
+      <td><div class="client-name-cell">${esc(c.name||'—')}</div><div class="client-email">${esc(c.email||'')}</div></td>
+      <td>${planChip(c.event)}</td>
+      <td style="color:var(--muted)">${esc(c.phone||'—')}</td>
+      <td style="color:var(--muted);font-size:.8rem">${esc(c.notes||'—')}</td>
+      <td>${statusBadge(c.status)}</td>
+      <td style="color:var(--muted);font-size:.8rem">${fdate(c.created_at)}</td>
+      <td>
+        <div class="action-row">
+          <button class="btn btn-outline btn-sm" onclick="manageModules('${c.id}')">🧩 Modules</button>
+          <button class="btn btn-outline btn-sm" onclick="toggleClientStatus('${c.id}','${c.status}')">${c.status==='active'?'Suspend':'Activate'}</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteClient('${c.id}','${esc(c.name)}')">Delete</button>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+function filterClients(){
+  const q=document.getElementById('searchInput').value.toLowerCase();
+  const filtered=allClients.filter(c=>(c.name||'').toLowerCase().includes(q)||(c.email||'').toLowerCase().includes(q)||(c.notes||'').toLowerCase().includes(q));
+  document.getElementById('clientCount').textContent=`${filtered.length} client${filtered.length!==1?'s':''}`;
+  if(!filtered.length){document.getElementById('clientsTableBody').innerHTML=`<tr><td colspan="7"><div class="empty"><div class="empty-icon">🔍</div>No results</div></td></tr>`;return;}
+  document.getElementById('clientsTableBody').innerHTML=filtered.map(c=>`
+    <tr>
+      <td><div class="client-name-cell">${esc(c.name||'—')}</div><div class="client-email">${esc(c.email||'')}</div></td>
+      <td>${planChip(c.event)}</td>
+      <td style="color:var(--muted)">${esc(c.phone||'—')}</td>
+      <td style="color:var(--muted);font-size:.8rem">${esc(c.notes||'—')}</td>
+      <td>${statusBadge(c.status)}</td>
+      <td style="color:var(--muted);font-size:.8rem">${fdate(c.created_at)}</td>
+      <td>
+        <div class="action-row">
+          <button class="btn btn-outline btn-sm" onclick="manageModules('${c.id}')">🧩 Modules</button>
+          <button class="btn btn-outline btn-sm" onclick="toggleClientStatus('${c.id}','${c.status}')">${c.status==='active'?'Suspend':'Activate'}</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteClient('${c.id}','${esc(c.name)}')">Delete</button>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+function manageModules(clientId){
+  navTo('modules');
+  document.getElementById('clientPicker').value=clientId;
+  activeClientId=clientId;
+  selectedMods.clear();
+  renderCSP();
+}
+
+async function toggleClientStatus(id,cur){
+  const ns=cur==='active'?'suspended':'active';
+  const {error}=await SB.from('clients').update({status:ns}).eq('id',id);
+  if(error){toast('Update failed','error');return;}
+  toast(`Client ${ns==='active'?'activated':'suspended'} ✓`);
+  await init();
+}
+
+async function deleteClient(id,name){
+  const ok=await confirm2('🗑️','Delete Client?',`"${name}" and all their data will be permanently removed.`,'Delete','btn-danger');
+  if(!ok)return;
+  await SB.from('client_subscriptions').delete().eq('client_id',id);
+  const {error}=await SB.from('clients').delete().eq('id',id);
+  if(error){toast('Delete failed: '+error.message,'error');return;}
+  toast(`"${name}" removed`);
+  await init();
+}
+
+// ── INVOICES TABLE ────────────────────────────────────────────
+async function renderInvoicesTable(){
+  const {data,error}=await SB.from('pos_invoices').select('*,clients(name)').order('created_at',{ascending:false});
+  if(error||!data?.length){document.getElementById('invoicesTableBody').innerHTML=`<tr><td colspan="7"><div class="empty"><div class="empty-icon">🧾</div>${error?'Error loading':'No invoices yet'}</div></td></tr>`;return;}
+  document.getElementById('invoicesTableBody').innerHTML=data.map(i=>`
+    <tr>
+      <td style="font-weight:600;font-size:.82rem;color:var(--green)">${esc(i.invoice_number||'—')}</td>
+      <td><div class="client-name-cell" style="font-size:.85rem">${esc(i.clients?.name||'—')}</div></td>
+      <td><span class="badge badge-blue">${esc(i.invoice_type||'—')}</span></td>
+      <td style="font-weight:700;font-family:'Syne',sans-serif">${fmt(i.amount)}</td>
+      <td>${invoiceBadge(i.status)}</td>
+      <td style="color:var(--muted);font-size:.82rem">${fdate(i.due_date)}</td>
+      <td style="color:var(--muted);font-size:.8rem;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.notes||'—')}</td>
+    </tr>`).join('');
+}
+
+// ═════════════════════════════════════════════════════════════
+// ── MODULE MANAGER ────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+
+function renderModStats(){
+  const activeSubs=allSubs.filter(s=>s.status==='active');
+  const mrr=activeSubs.reduce((sum,s)=>{
+    const m=allModules.find(x=>x.id===s.module_id);
+    return sum+Number(s.custom_fee||m?.monthly_fee||0);
+  },0);
+  document.getElementById('mod-total').textContent = allModules.length;
+  document.getElementById('mod-subs').textContent  = activeSubs.length;
+  document.getElementById('mod-mrr').textContent   = fmtK(mrr);
+}
+
+function setTierFilter(tier,btn){
+  tierFilter=tier;
+  document.querySelectorAll('.tier-tab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderModLib();
+}
+
+function renderModLib(){
+  const q=(document.getElementById('modSearch')?.value||'').toLowerCase();
+  const list=allModules.filter(m=>{
+    if(tierFilter!=='All'&&m.tier!==tierFilter)return false;
+    if(q&&!m.name.toLowerCase().includes(q)&&!(m.category||'').toLowerCase().includes(q))return false;
+    return m.is_active;
+  });
+
+  if(!list.length){
+    document.getElementById('modList').innerHTML='<div style="padding:1.5rem;text-align:center;color:var(--muted);font-size:.85rem">No modules match</div>';
+    return;
+  }
+
+  const assignedToClient=new Set(allSubs.filter(s=>s.client_id===activeClientId).map(s=>s.module_id));
+
+  document.getElementById('modList').innerHTML=list.map(m=>{
+    const alreadyAssigned=assignedToClient.has(m.id);
+    const isSel=selectedMods.has(m.id);
+    return `<div class="mod-item${isSel?' selected':''}${alreadyAssigned?' already-assigned':''}"
+      onclick="toggleModSel('${m.id}')" style="${alreadyAssigned?'opacity:.45;cursor:default':''}">
+      <div class="mod-item-check">${isSel?'✓':''}</div>
+      <div class="mod-item-info">
+        <div class="mod-item-name">${esc(m.name)}</div>
+        <div class="mod-item-fee">${fmt(m.monthly_fee)}/mo · <span class="${TIER_CLS[m.tier]||'tier-e'}">${m.tier.charAt(0)+m.tier.slice(1).toLowerCase()}</span>${alreadyAssigned?' · <span style="color:var(--muted)">assigned</span>':''}</div>
+        <button class="btn btn-outline btn-xs" style="margin-top:5px;font-size:.68rem"
+          onclick="event.stopPropagation();openModuleScriptEditor('${m.id}','${esc(m.name)}')">
+          ✏️ Edit Script
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleModSel(id){
+  const assignedToClient=new Set(allSubs.filter(s=>s.client_id===activeClientId).map(s=>s.module_id));
+  if(assignedToClient.has(id)){toast('Already assigned to this client','warning');return;}
+  if(selectedMods.has(id))selectedMods.delete(id);
+  else selectedMods.add(id);
+  renderModLib();
+  updateSelCount();
+}
+
+function updateSelCount(){
+  const el=document.getElementById('selCount');
+  if(el)el.textContent=selectedMods.size+' module'+(selectedMods.size!==1?'s':'')+' selected';
+}
+
+function populateClientPicker(){
+  const sel=document.getElementById('clientPicker');
+  const cur=sel.value;
+  sel.innerHTML='<option value="">— Pick a client —</option>'+
+    allClients.map(c=>`<option value="${c.id}"${c.id===cur?' selected':''}>${esc(c.name)} · ${planChip(c.event).replace(/<[^>]+>/g,'')} · ${c.status}</option>`).join('');
+}
+
+function onClientPick(){
+  activeClientId=document.getElementById('clientPicker').value;
+  selectedMods.clear();
+  renderModLib();
+  renderCSP();
+}
+
+function renderCSP(){
+  const body=document.getElementById('cspBody');
+  const mrrBar=document.getElementById('mrrBar');
+
+  if(!activeClientId){
+    body.innerHTML='<div class="csp-empty">Select a client above to manage their modules</div>';
+    mrrBar.style.display='none';
+    return;
+  }
+
+  const client=allClients.find(c=>c.id===activeClientId);
+  const clientSubs=allSubs.filter(s=>s.client_id===activeClientId);
+  const mrr=clientSubs.filter(s=>['active','trial'].includes(s.status)).reduce((sum,s)=>{
+    const m=allModules.find(x=>x.id===s.module_id);
+    return sum+Number(s.custom_fee||m?.monthly_fee||0);
+  },0);
+
+  const chips=clientSubs.map(s=>{
+    const m=allModules.find(x=>x.id===s.module_id);
+    if(!m)return '';
+    return `<span class="assigned-chip${s.status==='trial'?' trial-chip':''}">
+      <span class="${TIER_CLS[m.tier]||'tier-e'}">${m.tier[0]}</span>
+      ${esc(m.name)}
+      <span style="font-size:.7rem;color:var(--muted)">${fmt(s.custom_fee||m.monthly_fee)}</span>
+      <button class="chip-remove" data-sid="${s.id}" data-mname="${esc(m.name)}" title="Remove">✕</button>
+    </span>`;
+  }).join('');
+
+  const presets=`
+    <div class="preset-strip">
+      <span style="font-size:.75rem;color:var(--muted);align-self:center">Quick assign:</span>
+      <button class="btn btn-outline btn-xs" onclick="applyPreset('${activeClientId}','basic')">Basic preset</button>
+      <button class="btn btn-outline btn-xs" onclick="applyPreset('${activeClientId}','standard')">Standard preset</button>
+      <button class="btn btn-outline btn-xs" onclick="applyPreset('${activeClientId}','premium')">Premium preset</button>
+    </div>`;
+
+  body.innerHTML=`
+    <div class="assigned-section">
+      <div class="assigned-label">Assigned Modules (${clientSubs.length})</div>
+      <div class="assigned-chips" id="assignedChips">
+        ${chips||'<span class="no-mods">None assigned yet — select modules from the left</span>'}
+      </div>
+    </div>
+    ${presets}
+    <div class="assign-controls">
+      <div style="font-size:.78rem;font-weight:700;color:var(--muted);margin-bottom:.6rem;letter-spacing:.04em;text-transform:uppercase">Assign Selected Modules</div>
+      <div class="assign-ctrl-row">
+        <span class="assign-sel-count" id="selCount">${selectedMods.size} modules selected</span>
+        <select class="mini-select" id="subStatus"><option value="active">Active</option><option value="trial">Trial</option></select>
+        <input class="mini-input" id="customFee" type="number" min="0" placeholder="Custom fee (opt)"/>
+        <button class="btn btn-green btn-sm" onclick="assignSelected()">Assign →</button>
+        <button class="btn btn-outline btn-sm" onclick="selectedMods.clear();renderModLib();updateSelCount()">Clear</button>
+      </div>
+    </div>`;
+
+  mrrBar.style.display='flex';
+  document.getElementById('mrrValue').textContent=fmt(mrr)+'/mo';
+
+  document.getElementById('assignedChips').addEventListener('click',async e=>{
+    const btn=e.target.closest('.chip-remove');
+    if(!btn)return;
+    const sid=btn.dataset.sid;
+    const mname=btn.dataset.mname;
+    const ok=await confirm2('🔌','Remove Module?',`Remove "${mname}" from ${client?.name}?`,'Remove','btn-danger');
+    if(!ok)return;
+    const {error}=await SB.from('client_subscriptions').delete().eq('id',sid);
+    if(error){toast('Remove failed: '+error.message,'error');return;}
+    toast(`"${mname}" removed ✓`);
+    allSubs=allSubs.filter(s=>s.id!==sid);
+    renderModLib(); renderCSP(); renderModStats(); updateDashboardMRR();
+  },{once:false});
+}
+
+async function assignSelected(){
+  if(!activeClientId){toast('Pick a client first','warning');return;}
+  const ids=[...selectedMods];
+  if(!ids.length){toast('Select modules from the library on the left','warning');return;}
+
+  const status=document.getElementById('subStatus')?.value||'active';
+  const cfRaw=document.getElementById('customFee')?.value;
+  const customFee=cfRaw&&Number(cfRaw)>0?Number(cfRaw):null;
+  const now=new Date().toISOString();
+
+  const rows=ids.map(mid=>({
+    client_id:activeClientId, module_id:mid, status, activated_at:now,
+    ...(customFee?{custom_fee:customFee}:{})
+  }));
+
+  const {data,error}=await SB.from('client_subscriptions').insert(rows).select();
+  if(error){toast('Assign failed: '+error.message,'error');console.error(error);return;}
+
+  toast(`${ids.length} module${ids.length!==1?'s':''} assigned ✓`);
+  allSubs=[...allSubs,...(data||[])];
+  selectedMods.clear();
+  renderModLib(); renderCSP(); renderModStats(); updateDashboardMRR();
+}
+
+async function applyPreset(clientId,plan){
+  const tiers=PLAN_TIERS[plan]||['ESSENTIAL'];
+  const client=allClients.find(c=>c.id===clientId);
+  const existingIds=new Set(allSubs.filter(s=>s.client_id===clientId).map(s=>s.module_id));
+  const toAdd=allModules.filter(m=>m.is_active&&tiers.includes(m.tier)&&!existingIds.has(m.id));
+  if(!toAdd.length){toast('All preset modules already assigned','warning');return;}
+  const ok=await confirm2('🔄','Apply Preset?',`Assign ${toAdd.length} ${plan} module${toAdd.length!==1?'s':''} to ${client?.name}?`,'Apply','btn-green');
+  if(!ok)return;
+  const now=new Date().toISOString();
+  const rows=toAdd.map(m=>({client_id:clientId,module_id:m.id,status:'active',activated_at:now}));
+  const {data,error}=await SB.from('client_subscriptions').insert(rows).select();
+  if(error){toast('Preset failed: '+error.message,'error');return;}
+  toast(`${toAdd.length} ${plan} modules assigned ✓`);
+  allSubs=[...allSubs,...(data||[])];
+  renderModLib(); renderCSP(); renderModStats(); updateDashboardMRR();
+}
+
+// ── ONBOARD CLIENT ────────────────────────────────────────────
+function openOnboardModal(){document.getElementById('onboardModal').classList.add('open');}
+function closeOverlay(id){document.getElementById(id).classList.remove('open');}
+document.getElementById('onboardModal').addEventListener('click',e=>{if(e.target===document.getElementById('onboardModal'))closeOverlay('onboardModal');});
+
+async function addClient(){
+  const business=document.getElementById('f-business').value.trim();
+  const email=document.getElementById('f-email').value.trim();
+  if(!business||!email){toast('Business name and email are required','error');return;}
+  const btn=document.getElementById('onboardSaveBtn');
+  btn.disabled=true;btn.textContent='Saving…';
+  const payload={
+    id:'client-'+Date.now(),
+    name:business, email,
+    phone:document.getElementById('f-phone').value.trim(),
+    event:document.getElementById('f-plan').value,
+    notes:(document.getElementById('f-location').value.trim()||'')+(document.getElementById('f-notes').value.trim()?' — '+document.getElementById('f-notes').value.trim():''),
+    status:document.getElementById('f-status').value,
+    created_at:new Date().toISOString()
+  };
+  const {error}=await SB.from('clients').insert(payload);
+  btn.disabled=false;btn.textContent='Onboard Client';
+  if(error){toast('Error: '+error.message,'error');return;}
+  toast(`"${business}" onboarded ✓`);
+  closeOverlay('onboardModal');
+  ['f-business','f-owner','f-email','f-phone','f-location','f-notes'].forEach(id=>document.getElementById(id).value='');
+  await init();
+}
+
+// ═════════════════════════════════════════════════════════════
+// ── SEED DATA ENGINE ──────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════
+
+function renderSeedPreview(){
+  const el=document.getElementById('seedPreview');
+  if(!el)return;
+  el.innerHTML=MEJASON_MODULES.map(m=>`
+    <div style="display:flex;align-items:center;gap:.6rem;background:#ffffff;border:1px solid rgba(0,0,0,.08);border-radius:8px;padding:.6rem .8rem">
+      <span class="${TIER_CLS[m.tier]||'tier-e'}">${m.tier[0]}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.name)}</div>
+        <div style="font-size:.72rem;color:var(--muted)">${m.category} · ${fmt(m.monthly_fee)}/mo</div>
+      </div>
+    </div>`).join('');
+}
+
+function logSeed(msg){
+  const el=document.getElementById('seedLog');
+  if(!el)return;
+  const ts=new Date().toLocaleTimeString('en-KE');
+  el.textContent+=`[${ts}] ${msg}\n`;
+  el.scrollTop=el.scrollHeight;
+}
+
+async function seedModules(){
+  logSeed('Starting module seed (upsert mode — replaces any outdated entries)…');
+  let created=0, updated=0, errors=0;
+
+  for(const mod of MEJASON_MODULES){
+    const {error}=await SB.from('pos_modules').upsert(mod,{onConflict:'id'});
+    if(error){
+      logSeed(`ERROR ${mod.name}: ${error.message}`);
+      errors++;
+    } else {
+      const {data:existing}=await SB.from('pos_modules').select('id').eq('id',mod.id).single();
+      logSeed(`OK    ${mod.name} [${mod.tier}] @ ${fmt(mod.monthly_fee)}/mo`);
+      created++;
+    }
+  }
+
+  logSeed(`\nModules seeded: ${created} upserted, ${errors} errors.`);
+  if(errors===0) toast(`✓ All ${created} modules seeded/updated`);
+  else toast(`⚠ ${errors} errors — check log`,'warning');
+  await init();
+}
+
+async function nukeAndReseedModules(){
+  const ok=await confirm2('⚠️','Reset All Modules?',
+    'This will DELETE all existing modules and re-seed only the correct Mejason POS modules. Client subscriptions referencing old modules will also be cleared.',
+    'Reset & Reseed','btn-danger');
+  if(!ok) return;
+
+  logSeed('=== NUCLEAR RESET: deleting all modules and subscriptions ===');
+
+  // Delete all subscriptions first (FK constraint)
+  const {error:e1}=await SB.from('client_subscriptions').delete().neq('id','00000000-0000-0000-0000-000000000000');
+  if(e1){logSeed('ERROR clearing subscriptions: '+e1.message);return;}
+  logSeed('Cleared all client_subscriptions');
+
+  // Delete all modules
+  const {error:e2}=await SB.from('pos_modules').delete().neq('id','placeholder');
+  if(e2){logSeed('ERROR clearing modules: '+e2.message);return;}
+  logSeed('Cleared all pos_modules');
+
+  logSeed('');
+  await seedModules();
+}
+
+async function seedMejazonClient(){
+  logSeed('Seeding Mejason Media Production…');
+
+  // 1. Create or update the client
+  const {data:existingClient}=await SB.from('clients').select('id').eq('id',MEJASON_CLIENT.id).single();
+  if(existingClient){
+    await SB.from('clients').update({status:'active',name:MEJASON_CLIENT.name}).eq('id',MEJASON_CLIENT.id);
+    logSeed('Client exists — status set to active.');
+  } else {
+    const {error:ce}=await SB.from('clients').insert(MEJASON_CLIENT);
+    if(ce){logSeed('ERROR creating client: '+ce.message);return;}
+    logSeed('Client created: Mejason Media Production (premium, active)');
+  }
+
+  // 2. Load modules from DB
+  const {data:mods}=await SB.from('pos_modules').select('*').eq('is_active',true);
+  if(!mods?.length){
+    logSeed('No modules found in pos_modules — seed modules first!');
+    toast('Seed modules first!','warning');
+    return;
+  }
+  logSeed(`Found ${mods.length} active modules in database.`);
+
+  // 3. CLEAR all existing subscriptions for this client then re-assign all
+  // This ensures no stale/wrong module IDs remain
+  const {error:delErr}=await SB.from('client_subscriptions').delete().eq('client_id',MEJASON_CLIENT.id);
+  if(delErr){logSeed('WARN clearing old subs: '+delErr.message);}
+  else{logSeed('Cleared old subscriptions for Mejason.');}
+
+  // 4. Assign ALL active modules
+  const now=new Date().toISOString();
+  const rows=mods.map(m=>({
+    client_id:MEJASON_CLIENT.id,
+    module_id:m.id,
+    status:'active',
+    activated_at:now
+  }));
+
+  const {error:se}=await SB.from('client_subscriptions').insert(rows);
+  if(se){logSeed('ERROR assigning modules: '+se.message);toast('Error: '+se.message,'error');return;}
+
+  logSeed(`\n✓ Assigned all ${rows.length} modules to Mejason Media Production:`);
+  mods.forEach(m=>logSeed(`  ✓ ${m.name} [${m.tier}] @ ${fmt(m.monthly_fee)}/mo`));
+
+  const totalMRR=mods.reduce((sum,m)=>sum+Number(m.monthly_fee),0);
+  logSeed(`\nMejason total MRR: ${fmt(totalMRR)}/month`);
+
+  toast(`Mejason fully seeded — ${rows.length} modules, MRR ${fmt(totalMRR)}`);
+  await init();
+}
+
+async function seedAll(){
+  const el=document.getElementById('seedLog');
+  if(el)el.textContent='';
+  logSeed('=== Full seed started ===\n');
+  await seedModules();
+  logSeed('');
+  await seedMejazonClient();
+  logSeed('\n=== Seed complete ===');
+}
+
+// ── MODULE SCRIPT EDITOR ──────────────────────────────────────
+let mseCurrentModId = null;
+
+async function openModuleScriptEditor(modId, modName) {
+  mseCurrentModId = modId;
+  document.getElementById('mse-name').textContent = modName;
+  document.getElementById('mse-status').textContent = '';
+  document.getElementById('mse-status').style.color = '';
+  const btn = document.getElementById('mse-save-btn');
+  btn.disabled = false; btn.textContent = '💾 Save Script';
+
+  // Clear all fields first
+  ['mse-notes','mse-config','mse-webhook','mse-script'].forEach(id =>
+    document.getElementById(id).value = '');
+
+  // Try loading existing script data from Supabase
+  try {
+    const { data, error } = await SB
+      .from('module_scripts')
+      .select('*')
+      .eq('module_id', modId)
+      .single();
+    if (data && !error) {
+      document.getElementById('mse-notes').value   = data.notes          || '';
+      document.getElementById('mse-config').value  = data.config         || '';
+      document.getElementById('mse-webhook').value = data.webhook_url    || '';
+      document.getElementById('mse-script').value  = data.custom_script  || '';
+      document.getElementById('mse-status').style.color = 'var(--green)';
+      document.getElementById('mse-status').textContent = '✓ Existing script loaded';
+      setTimeout(() => { document.getElementById('mse-status').textContent = ''; }, 2500);
+    }
+  } catch(e) {
+    // module_scripts table may not exist yet — that's fine, user will save and it will upsert
+    console.info('module_scripts not found or empty — will create on save:', e.message);
+  }
+
+  document.getElementById('moduleScriptModal').classList.add('open');
+}
+
+async function saveModuleScript() {
+  if (!mseCurrentModId) return;
+  const btn = document.getElementById('mse-save-btn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+
+  // Validate JSON config field if not empty
+  const configRaw = document.getElementById('mse-config').value.trim();
+  if (configRaw) {
+    try { JSON.parse(configRaw); }
+    catch(e) {
+      document.getElementById('mse-status').style.color = 'var(--red)';
+      document.getElementById('mse-status').textContent = '❌ Config is not valid JSON — fix it and try again.';
+      btn.disabled = false; btn.textContent = '💾 Save Script';
+      return;
+    }
+  }
+
+  const payload = {
+    module_id:     mseCurrentModId,
+    notes:         document.getElementById('mse-notes').value.trim()   || null,
+    config:        configRaw                                            || null,
+    webhook_url:   document.getElementById('mse-webhook').value.trim() || null,
+    custom_script: document.getElementById('mse-script').value.trim()  || null,
+    updated_at:    new Date().toISOString()
+  };
+
+  const { error } = await SB
+    .from('module_scripts')
+    .upsert(payload, { onConflict: 'module_id' });
+
+  btn.disabled = false; btn.textContent = '💾 Save Script';
+
+  if (error) {
+    document.getElementById('mse-status').style.color = 'var(--red)';
+    document.getElementById('mse-status').textContent =
+      '❌ ' + error.message + (error.code === '42P01'
+        ? ' — Run the SQL shown below to create the module_scripts table first.'
+        : '');
+  } else {
+    document.getElementById('mse-status').style.color = 'var(--green)';
+    document.getElementById('mse-status').textContent = '✅ Script saved successfully!';
+    toast('Module script saved ✓');
+    setTimeout(() => closeOverlay('moduleScriptModal'), 1600);
+  }
+}
+
+// ── ADMIN STAFF MANAGEMENT ────────────────────────────────
+let allStaff = [];
+
+async function renderAdminStaff() {
+  const { data: staff } = await SB.from('pos_staff').select('*').order('created_at',{ascending:false});
+  allStaff = staff || [];
+
+  document.getElementById('staff-total').textContent  = allStaff.length;
+  document.getElementById('staff-active').textContent = allStaff.filter(s=>s.is_active!==false).length;
+  document.getElementById('staff-shops').textContent  = new Set(allStaff.map(s=>s.client_id)).size;
+
+  // Populate client filter
+  const sel = document.getElementById('staff-client-filter');
+  if (sel) {
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— All Clients —</option>' +
+      allClients.map(c=>`<option value="${c.id}"${c.id===cur?' selected':''}>${esc(c.name)}</option>`).join('');
+  }
+
+  const filterClient = sel?.value || '';
+  const list = filterClient ? allStaff.filter(s=>s.client_id===filterClient) : allStaff;
+  const roleBadge = {owner:'badge-purple',admin:'badge-red',manager:'badge-blue',cashier:'badge-green'};
+
+  const tbody = document.getElementById('staff-table-body');
+  if (!tbody) return;
+  if (!list.length) {
+    tbody.innerHTML=`<tr><td colspan="7"><div class="empty"><div class="empty-icon">👥</div>No staff users${filterClient?' for this client':''}</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = list.map(s=>{
+    const client=allClients.find(c=>c.id===s.client_id);
+    return `<tr>
+      <td><div class="client-name-cell">${esc(s.full_name||s.username)}</div></td>
+      <td style="color:var(--muted);font-size:.82rem">@${esc(s.username)}</td>
+      <td><span class="badge ${roleBadge[s.role]||'badge-muted'}">${esc(s.role)}</span></td>
+      <td><div class="client-name-cell" style="font-size:.82rem">${esc(client?.name||s.client_id)}</div></td>
+      <td>${s.is_active!==false
+        ?'<span class="badge badge-green"><span class="badge-dot"></span>Active</span>'
+        :'<span class="badge badge-red"><span class="badge-dot"></span>Disabled</span>'}</td>
+      <td style="color:var(--muted);font-size:.8rem">${fdate(s.created_at)}</td>
+      <td><div class="action-row">
+        <button class="btn btn-outline btn-sm" onclick="openAdminEditStaffModal('${s.id}')">Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="adminDeleteStaff('${s.id}','${esc(s.full_name||s.username)}')">Delete</button>
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
+function openAdminAddStaffModal() {
+  const modal = document.getElementById('onboardModal');
+  modal.querySelector('.modal-title').innerHTML =
+    'Add Staff User <button class="modal-close" onclick="closeOverlay(\'onboardModal\')">✕</button>';
+  modal.querySelector('.modal-title').nextElementSibling.innerHTML = `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Client / Shop *</label>
+        <select class="form-input" id="af-client">
+          <option value="">— Select client —</option>
+          ${allClients.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Role *</label>
+        <select class="form-input" id="af-role">
+          <option value="owner">Owner — full access + user mgmt</option>
+          <option value="admin">Admin — full access</option>
+          <option value="manager">Manager — module-based</option>
+          <option value="cashier">Cashier — POS only</option>
+        </select></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Full Name *</label>
+        <input class="form-input" id="af-name" placeholder="e.g. Jane Wambua"/></div>
+      <div class="form-group"><label class="form-label">Username *</label>
+        <input class="form-input" id="af-username" placeholder="e.g. jane.wambua"/></div>
+    </div>
+    <div class="form-group"><label class="form-label">Password * (min 6 chars)</label>
+      <input class="form-input" type="password" id="af-password" placeholder="Set a secure password"/></div>
+    <div id="af-err" style="color:var(--red);font-size:.78rem;min-height:16px;margin-bottom:4px"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeOverlay('onboardModal')">Cancel</button>
+      <button class="btn btn-green" onclick="saveAdminStaff()">Create User</button>
+    </div>`;
+  document.getElementById('onboardModal').classList.add('open');
+}
+
+async function saveAdminStaff() {
+  const clientId=document.getElementById('af-client')?.value;
+  const role    =document.getElementById('af-role')?.value;
+  const name    =document.getElementById('af-name')?.value.trim();
+  const username=document.getElementById('af-username')?.value.trim().toLowerCase();
+  const password=document.getElementById('af-password')?.value;
+  const errEl   =document.getElementById('af-err');
+  errEl.textContent='';
+  if(!clientId){errEl.textContent='Select a client.';return;}
+  if(!name||!username||!password){errEl.textContent='All fields required.';return;}
+  if(password.length<6){errEl.textContent='Password must be ≥ 6 characters.';return;}
+  const {error}=await SB.from('pos_staff').insert({
+    client_id:clientId,full_name:name,username,password_hash:password,role,is_active:true,
+    created_at:new Date().toISOString()
+  });
+  if(error){errEl.textContent=error.message.includes('unique')?'Username already exists for this client.':error.message;return;}
+  toast('Staff user created ✓');
+  closeOverlay('onboardModal');
+  renderAdminStaff();
+}
+
+async function openAdminEditStaffModal(id) {
+  const s=allStaff.find(x=>x.id===id); if(!s) return;
+  const modal=document.getElementById('onboardModal');
+  modal.querySelector('.modal-title').innerHTML=
+    `Edit Staff — ${esc(s.full_name||s.username)} <button class="modal-close" onclick="closeOverlay('onboardModal')">✕</button>`;
+  modal.querySelector('.modal-title').nextElementSibling.innerHTML=`
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Full Name</label>
+        <input class="form-input" id="ef-name" value="${esc(s.full_name||'')}"/></div>
+      <div class="form-group"><label class="form-label">Role</label>
+        <select class="form-input" id="ef-role">
+          <option value="owner"   ${s.role==='owner'  ?'selected':''}>Owner</option>
+          <option value="admin"   ${s.role==='admin'  ?'selected':''}>Admin</option>
+          <option value="manager" ${s.role==='manager'?'selected':''}>Manager</option>
+          <option value="cashier" ${s.role==='cashier'?'selected':''}>Cashier</option>
+        </select></div>
+    </div>
+    <div class="form-group"><label class="form-label">New Password (leave blank to keep)</label>
+      <input class="form-input" type="password" id="ef-password" placeholder="New password…"/></div>
+    <label class="form-label" style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px">
+      <input type="checkbox" id="ef-active" ${s.is_active!==false?'checked':''} style="accent-color:var(--green)"/>
+      Account is active
+    </label>
+    <div id="ef-err" style="color:var(--red);font-size:.78rem;min-height:16px;margin-bottom:4px"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeOverlay('onboardModal')">Cancel</button>
+      <button class="btn btn-green" onclick="saveAdminEditStaff('${id}')">Save Changes</button>
+    </div>`;
+  document.getElementById('onboardModal').classList.add('open');
+}
+
+async function saveAdminEditStaff(id) {
+  const name    =document.getElementById('ef-name')?.value.trim();
+  const role    =document.getElementById('ef-role')?.value;
+  const password=document.getElementById('ef-password')?.value;
+  const isActive=document.getElementById('ef-active')?.checked;
+  const errEl   =document.getElementById('ef-err');
+  errEl.textContent='';
+  if(!name){errEl.textContent='Full name required.';return;}
+  if(password&&password.length<6){errEl.textContent='Password must be ≥ 6 characters.';return;}
+  const updates={full_name:name,role,is_active:isActive};
+  if(password) updates.password_hash=password;
+  const {error}=await SB.from('pos_staff').update(updates).eq('id',id);
+  if(error){errEl.textContent=error.message;return;}
+  toast('Staff updated ✓');
+  closeOverlay('onboardModal');
+  renderAdminStaff();
+}
+
+async function adminDeleteStaff(id, name) {
+  const ok=await confirm2('👥','Remove Staff?',`Remove "${name}"? They will no longer be able to log in.`,'Remove','btn-danger');
+  if(!ok) return;
+  const {error}=await SB.from('pos_staff').delete().eq('id',id);
+  if(error){toast('Delete failed: '+error.message,'error');return;}
+  toast(`"${name}" removed ✓`);
+  renderAdminStaff();
+}
+
+// ── KEYBOARD ─────────────────────────────────────────────────
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){
+    closeOverlay('onboardModal');
+    closeOverlay('moduleScriptModal');
+    confirmResolve(false);
+  }
+});
+
+// ── INIT ──────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>

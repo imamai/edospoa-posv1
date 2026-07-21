@@ -1,0 +1,844 @@
+// ============================================================
+//  MEJASAN MEDIA PRODUCTION — Google Apps Script
+// ============================================================
+
+const MEJASAN_EMAIL = 'imamai.w@gmail.com';
+const MEJASAN_NAME  = 'Mejasan Media Production';
+const DRIVE_FOLDER  = 'Mejasan Bookings';
+
+// ── LOGO FILE ID ──────────────────────────────────────────
+// To get the ID: right-click the logo in Drive → Get Link → copy the ID from the URL
+const LOGO_FILE_ID = '1ZTtHWuSEX5Pf9mFrrKRDPCiilLohHpbN'; // ← replace with your actual ID
+
+// ═════════════════════════════════════════════════════════
+//  ENTRY POINT
+// ═════════════════════════════════════════════════════════
+function doPost(e) {
+  if (!e || !e.parameter || !e.parameter.payload) {
+    Logger.log('⚠️  doPost called without a request payload. Run testPDFGeneration() to test manually.');
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: 'error', message: 'No payload received. Use testPDFGeneration() for manual tests.' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  try {
+    const data         = JSON.parse(e.parameter.payload);
+    const isCorrection = e.parameter.correction === 'true';
+
+    if (isCorrection) {
+      updateExistingRow(data);
+    } else {
+      saveToSheet(data);
+    }
+
+    // Generate PDFs twice: once for Drive, once for email
+    // (Blobs can only be attached/saved once each)
+    const summaryBlob  = generateSummaryPDF(data);
+    const contractBlob = generateContractPDF(data);
+    saveToDrive(data, summaryBlob, contractBlob);
+
+    const summaryBlob2  = generateSummaryPDF(data);
+    const contractBlob2 = generateContractPDF(data);
+    sendEmails(data, summaryBlob2, contractBlob2);
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: 'success' }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    try {
+      MailApp.sendEmail(MEJASAN_EMAIL, '⚠️ Mejasan GAS Error', err.toString() + '\n\n' + err.stack);
+    } catch (_) {}
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ── HANDLE GET (health check) ─────────────────────────────
+function doGet(e) {
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: 'ok', service: 'Mejasan Media Production' }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ── CHECK FOR DUPLICATE ───────────────────────────────────
+function doGetWithParams(e) {
+  if (!e || !e.parameter) {
+    return ContentService.createTextOutput('{}').setMimeType(ContentService.MimeType.JSON);
+  }
+  if (e.parameter.action === 'checkDuplicate') {
+    const email = (e.parameter.email || '').toLowerCase().trim();
+    const date  = (e.parameter.date  || '').trim();
+    const found = findExistingRow(email, date);
+    return ContentService
+      .createTextOutput(JSON.stringify({ duplicate: found }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  return ContentService.createTextOutput('{}').setMimeType(ContentService.MimeType.JSON);
+}
+
+// ── FIND EXISTING ROW ─────────────────────────────────────
+function findExistingRow(email, date) {
+  try {
+    const sheet   = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    const rows    = sheet.getDataRange().getValues();
+    if (rows.length < 2) return false;
+    const headers  = rows[0];
+    const emailCol = headers.indexOf('client_email');
+    const dateCol  = headers.indexOf('wedding_date');
+    if (emailCol === -1 || dateCol === -1) return false;
+
+    for (let i = 1; i < rows.length; i++) {
+      const rowEmail = (rows[i][emailCol] || '').toLowerCase().trim();
+      const rowDate  = (rows[i][dateCol]  || '').toString().trim();
+      if (rowEmail === email && rowDate === date) return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+// ── UPDATE EXISTING ROW ───────────────────────────────────
+function updateExistingRow(data) {
+  const sheet   = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  const rows    = sheet.getDataRange().getValues();
+  const headers = rows[0];
+
+  const emailCol = headers.indexOf('client_email');
+  const dateCol  = headers.indexOf('wedding_date');
+  if (emailCol === -1 || dateCol === -1) { saveToSheet(data); return; }
+
+  const email = (data.client_email || '').toLowerCase().trim();
+  const date  = (data.wedding_date || '').trim();
+
+  for (let i = 1; i < rows.length; i++) {
+    const rowEmail = (rows[i][emailCol] || '').toLowerCase().trim();
+    const rowDate  = (rows[i][dateCol]  || '').toString().trim();
+
+    if (rowEmail === email && rowDate === date) {
+      const newValues = headers.map(function(h) {
+        return data[h] !== undefined ? data[h] : rows[i][headers.indexOf(h)];
+      });
+      sheet.getRange(i + 1, 1, 1, headers.length).setValues([newValues]);
+      sheet.getRange(i + 1, 1).setNote('Last corrected: ' + new Date().toLocaleString());
+      Logger.log('Row ' + (i + 1) + ' updated for ' + email + ' / ' + date);
+      return;
+    }
+  }
+  saveToSheet(data);
+}
+
+// ── SAVE TO SHEET ─────────────────────────────────────────
+function saveToSheet(data) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(Object.keys(data));
+    const h = sheet.getRange(1, 1, 1, Object.keys(data).length);
+    h.setBackground('#0a0a0a');
+    h.setFontColor('#CC0000');
+    h.setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+  sheet.appendRow(Object.values(data));
+}
+
+// ── SAVE TO DRIVE ─────────────────────────────────────────
+function saveToDrive(data, summaryBlob, contractBlob) {
+  const folders      = DriveApp.getFoldersByName(DRIVE_FOLDER);
+  const mainFolder   = folders.hasNext() ? folders.next() : DriveApp.createFolder(DRIVE_FOLDER);
+  const coupleName   = (data.bride_name || 'Bride') + ' & ' + (data.groom_name || 'Groom') + ' — ' + (data.wedding_date || 'Unknown Date');
+  const subFolders   = mainFolder.getFoldersByName(coupleName);
+  const coupleFolder = subFolders.hasNext() ? subFolders.next() : mainFolder.createFolder(coupleName);
+  const existingFiles = coupleFolder.getFiles();
+  while (existingFiles.hasNext()) { existingFiles.next().setTrashed(true); }
+  coupleFolder.createFile(summaryBlob);
+  coupleFolder.createFile(contractBlob);
+}
+
+// ── SEND EMAILS ───────────────────────────────────────────
+function sendEmails(data, summaryBlob, contractBlob) {
+  const coupleName  = (data.bride_name || '') + ' & ' + (data.groom_name || '');
+  const weddingDate = data.wedding_date || 'TBD';
+  const clientEmail = data.client_email || '';
+
+  MailApp.sendEmail({
+    to: MEJASAN_EMAIL,
+    subject: '📋 New Booking: ' + coupleName + ' — ' + weddingDate,
+    htmlBody: buildMejasanEmailHTML(data),
+    attachments: [summaryBlob, contractBlob],
+    name: MEJASAN_NAME
+  });
+
+  if (clientEmail) {
+    MailApp.sendEmail({
+      to: clientEmail,
+      subject: 'Your Mejasan Booking is Confirmed — ' + coupleName,
+      htmlBody: buildClientEmailHTML(data),
+      attachments: [summaryBlob, contractBlob],
+      name: MEJASAN_NAME
+    });
+  }
+}
+
+// ═════════════════════════════════════════════════════════
+//  QUESTIONNAIRE PDF — generateSummaryPDF
+//  Matches the exact layout of the reference PDF:
+//  • Logo centered at top
+//  • MEJASAN MEDIA PRODUCTION bold black + subtitle regular
+//  • Italic intro + thin gray HR separator
+//  • Section headings: bold black + solid red HR rule beneath
+//  • Questions: indented, normal, thin gray answer line beneath
+//  • Answers printed in RED on the answer lines
+//  • Timeline: bold number + dot leaders + red answer inline
+//  • Family groupings: 10 blank ruled lines
+//  • Footer: "We Deliver Quality" italic centered + page number
+// ═════════════════════════════════════════════════════════
+function generateSummaryPDF(data) {
+  var bride = data.bride_name || '';
+  var groom = data.groom_name || '';
+
+  var doc  = DocumentApp.create('__temp_questionnaire__');
+  var body = doc.getBody();
+
+  // ── Base font: Arial 11pt throughout ─────────────────────
+  var baseStyle = {};
+  baseStyle[DocumentApp.Attribute.FONT_FAMILY]      = 'Arial';
+  baseStyle[DocumentApp.Attribute.FONT_SIZE]        = 11;
+  baseStyle[DocumentApp.Attribute.FOREGROUND_COLOR] = '#000000';
+  body.setAttributes(baseStyle);
+
+  // Page margins (matching reference: ~1 inch sides)
+  body.setMarginLeft(72);
+  body.setMarginRight(72);
+  body.setMarginTop(54);
+  body.setMarginBottom(54);
+
+  // ── LOGO ─────────────────────────────────────────────────
+  try {
+    var logoFile = DriveApp.getFileById(LOGO_FILE_ID);
+    var logoBlob = logoFile.getBlob();
+    var logoPara = body.appendParagraph('');
+    logoPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+    var img    = logoPara.appendInlineImage(logoBlob);
+    var origW  = img.getWidth(), origH = img.getHeight();
+    var targetW = 150;
+    img.setWidth(targetW);
+    img.setHeight(Math.round(origH * (targetW / origW)));
+  } catch(e) {
+    // Fallback: red text logo if file ID not set
+    var logoFallback = body.appendParagraph('MEJASAN MEDIA PRODUCTION');
+    logoFallback.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+    logoFallback.editAsText().setForegroundColor('#CC0000').setFontSize(18).setBold(true);
+  }
+
+  // ── MEJASAN MEDIA PRODUCTION (bold, black, centered) ─────
+  var titlePara = body.appendParagraph('MEJASAN MEDIA PRODUCTION');
+  titlePara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  titlePara.setSpacingBefore(8);
+  titlePara.setSpacingAfter(2);
+  var titleText = titlePara.editAsText();
+  titleText.setFontFamily('Arial');
+  titleText.setFontSize(14);
+  titleText.setBold(true);
+  titleText.setForegroundColor('#000000');
+
+  // ── WEDDING MEDIA PLANNING QUESTIONNAIRE (normal, centered) ─
+  var subtitlePara = body.appendParagraph('WEDDING MEDIA PLANNING QUESTIONNAIRE');
+  subtitlePara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  subtitlePara.setSpacingBefore(0);
+  subtitlePara.setSpacingAfter(10);
+  var subtitleText = subtitlePara.editAsText();
+  subtitleText.setFontFamily('Arial');
+  subtitleText.setFontSize(10);
+  subtitleText.setBold(false);
+  subtitleText.setForegroundColor('#000000');
+
+  // ── Italic intro paragraph ────────────────────────────────
+  var introPara = body.appendParagraph(
+    'Kindly fill in the details below to help us plan and execute exceptional photography, videography, and drone coverage for your wedding day.'
+  );
+  introPara.setAlignment(DocumentApp.HorizontalAlignment.LEFT);
+  introPara.setSpacingBefore(0);
+  introPara.setSpacingAfter(8);
+  var introText = introPara.editAsText();
+  introText.setFontFamily('Arial');
+  introText.setFontSize(10);
+  introText.setItalic(true);
+  introText.setBold(false);
+  introText.setForegroundColor('#333333');
+
+  // ── Thin gray separator line ──────────────────────────────
+  appendThinRule(body);
+
+  // ── SECTION 1: EVENT OVERVIEW & LOGISTICS ─────────────────
+  appendSectionHeading(body, '1. EVENT OVERVIEW & LOGISTICS');
+  appendQuestion(body, '1. Full Names of Bride and Groom:',
+    (bride && groom) ? bride + ' & ' + groom : (bride || groom || ''));
+  appendQuestion(body, '2. Wedding Date(s):',                data.wedding_date        || '');
+  appendQuestion(body, '3. Wedding Theme Color(s):',         data.theme_colors        || '');
+  appendQuestion(body, '4. Overall Wedding Theme/Concept (e.g., rustic, royal, modern, garden, traditional):', data.wedding_theme || '');
+  appendQuestion(body, '5. Bride Preparation Location (Include exact address or GPS pin):',  data.bride_prep_location || '');
+  appendQuestion(body, '6. Groom Preparation Location (Include exact address or GPS pin):',  data.groom_prep_location || '');
+  appendQuestion(body, '7. Ceremony Venue (Name & Location):',  data.ceremony_venue   || '');
+  appendQuestion(body, '8. Reception Venue (Name & Location):', data.reception_venue  || '');
+
+  // ── SECTION 2: WEDDING DAY TIMELINE ───────────────────────
+  appendSectionHeading(body, '2. WEDDING DAY TIMELINE');
+  appendTimelineItem(body, '1.', 'Bride Prep Start Time:',  data.bride_prep_time || '');
+  appendTimelineItem(body, '2.', 'Groom Prep Start Time:', data.groom_prep_time || '');
+  appendTimelineItem(body, '3.', 'Ceremony Start Time:',   data.ceremony_time   || '');
+  appendTimelineItem(body, '4.', 'Reception Start Time:',  data.reception_time  || '');
+  appendTimelineItem(body, '5.', 'Expected End Time:',     data.end_time        || '');
+
+  // ── SECTION 3: CREATIVE DIRECTION & STYLE PREFERENCES ─────
+  appendSectionHeading(body, '3. CREATIVE DIRECTION & STYLE PREFERENCES');
+  appendQuestion(body, '1. Describe the photography style you prefer (e.g., documentary, editorial, traditional, luxury):', data.photo_style      || '');
+  appendQuestion(body, '2. Describe the video style you prefer (e.g., cinematic, fun, emotional, dramatic):',              data.video_style      || '');
+  appendQuestion(body, '3. Are there specific reference photos or videos you like? (Attach separately if possible)',        data.style_references || '');
+  appendQuestion(body, '4. Are there styles or shots you DO NOT like?',                                                    data.style_avoid      || '');
+
+  // ── SECTION 4: KEY PEOPLE & PRIORITY COVERAGE ─────────────
+  appendSectionHeading(body, '4. KEY PEOPLE & PRIORITY COVERAGE');
+  appendQuestionTwoLines(body, "1. Parents' Names (Bride & Groom):",
+    data.bride_parents || '', data.groom_parents || '');
+  appendQuestion(body, '2. Best Man & Maid of Honor:',
+    (data.best_man && data.maid_of_honour)
+      ? data.best_man + '  |  ' + data.maid_of_honour
+      : (data.best_man || data.maid_of_honour || ''));
+  appendQuestionTwoLines(body, '3. VIP Guests or Special Dignitaries:', data.vip_guests || '', '');
+
+  // ── SECTION 5: FAMILY PHOTO GROUPINGS REQUIRED ────────────
+  appendSectionHeading(body, '5. FAMILY PHOTO GROUPINGS REQUIRED');
+  var instrPara = body.appendParagraph('List specific family combinations you would like photographed:');
+  instrPara.setSpacingBefore(4);
+  instrPara.setSpacingAfter(4);
+  instrPara.editAsText().setFontFamily('Arial').setFontSize(11).setBold(false)
+    .setForegroundColor('#000000').setItalic(false);
+  var groups = [];
+  if (data.family_groupings) {
+    groups = data.family_groupings.split('|').map(function(g) { return g.trim(); }).filter(Boolean);
+  }
+  while (groups.length < 10) { groups.push(''); }
+  for (var gi = 0; gi < groups.length; gi++) {
+    appendAnswerLine(body, groups[gi]);
+  }
+
+  // ── SECTION 6: DELIVERABLES & PACKAGE DETAILS ─────────────
+  appendSectionHeading(body, '6. DELIVERABLES & PACKAGE DETAILS');
+  appendQuestion(body, '1. Videography: Preferred highlight length?', data.highlight_length || '');
+  appendQuestion(body, '2. Do you require a full documentary edit?',  data.documentary_edit || '');
+
+  // ── SECTION 7: AUDIO & TECHNICAL COORDINATION ─────────────
+  appendSectionHeading(body, '7. AUDIO & TECHNICAL COORDINATION');
+  appendQuestionTwoLines(body, '1. Will there be a PA system available?',                    data.pa_system         || '', '');
+  appendQuestionTwoLines(body, '2. Who is in charge of the sound system? (Provide contact)', data.sound_contact     || '', '');
+  appendQuestionTwoLines(body, '3. Are there live performances or surprise presentations?',  data.live_performances || '', '');
+
+  // ── SECTION 8: COORDINATION CONTACTS ──────────────────────
+  appendSectionHeading(body, '8. COORDINATION CONTACTS');
+  appendQuestionTwoLines(body, '1. Wedding Planner (Name & Contact):',         data.planner_name       || '', data.planner_contact       || '');
+  appendQuestionTwoLines(body, '2. MC (Name & Contact):',                      data.mc_name            || '', data.mc_contact            || '');
+  appendQuestionTwoLines(body, '3. Church Coordinator (Name & Contact):',      data.church_coord_name  || '', data.church_coord_contact  || '');
+  appendQuestionTwoLines(body, '4. Reception Venue Manager (Name & Contact):', data.venue_manager_name || '', data.venue_manager_contact || '');
+
+  // ── SECTION 9: YOUR LOVE STORY ─────────────────────────────
+  appendSectionHeading(body, '9. YOUR LOVE STORY (FOR CINEMATIC HIGHLIGHT FILM)');
+  appendQuestionTwoLines(body, '1. How did you meet?',                         data.how_you_met    || '', '');
+  appendQuestionTwoLines(body, '2. Proposal story:',                           data.proposal_story || '', '');
+  appendQuestion(body,         '3. Special songs or meaningful quotes:',       data.special_songs  || '');
+  appendQuestionTwoLines(body, '4. Any surprises planned during the wedding?', data.surprises      || '', '');
+
+  // ── SECTION 10: AGREEMENT CONFIRMATION ────────────────────
+  appendSectionHeading(body, '10. AGREEMENT CONFIRMATION');
+  appendQuestionTwoLines(body, '1. Selected Package:',                    data.selected_package    || '', '');
+  appendQuestion(body,         '2. Any additional services requested:',   data.additional_services || '');
+  appendQuestion(body,         '3. Preferred delivery timeline expectations:', data.delivery_timeline || '');
+
+  // ── Closing thank-you (bold, centered) ────────────────────
+  var thankPara = body.appendParagraph(
+    'Thank you for choosing Mejasan Media Production. We look forward to telling your story beautifully.'
+  );
+  thankPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  thankPara.setSpacingBefore(20);
+  thankPara.setSpacingAfter(8);
+  var thankText = thankPara.editAsText();
+  thankText.setFontFamily('Arial');
+  thankText.setFontSize(11);
+  thankText.setBold(true);
+  thankText.setForegroundColor('#000000');
+
+  // ── Save & export ─────────────────────────────────────────
+  doc.saveAndClose();
+  var docFile = DriveApp.getFileById(doc.getId());
+  var pdfBlob = docFile.getAs('application/pdf');
+  pdfBlob.setName('Questionnaire — ' + (bride || 'Bride') + ' & ' + (groom || 'Groom') + ' — ' + (data.wedding_date || 'Date') + '.pdf');
+  docFile.setTrashed(true);
+  return pdfBlob;
+}
+
+// ── Questionnaire helper: thin gray rule ──────────────────
+function appendThinRule(body) {
+  var rule = body.appendParagraph('');
+  rule.setSpacingBefore(2);
+  rule.setSpacingAfter(2);
+  var ruleStyle = {};
+  ruleStyle[DocumentApp.Attribute.BORDER_COLOR] = '#cccccc';
+  ruleStyle[DocumentApp.Attribute.BORDER_WIDTH] = 1;
+  rule.setAttributes(ruleStyle);
+}
+
+// ── Questionnaire helper: section heading + red rule ──────
+function appendSectionHeading(body, title) {
+  var spacer = body.appendParagraph('');
+  spacer.setSpacingBefore(0);
+  spacer.setSpacingAfter(0);
+
+  var h = body.appendParagraph(title);
+  h.setAlignment(DocumentApp.HorizontalAlignment.LEFT);
+  h.setSpacingBefore(10);
+  h.setSpacingAfter(0);
+  var ht = h.editAsText();
+  ht.setFontFamily('Arial');
+  ht.setFontSize(11);
+  ht.setBold(true);
+  ht.setForegroundColor('#000000');
+  ht.setItalic(false);
+  ht.setUnderline(false);
+
+  // Red rule: tiny underscore characters coloured red (most reliable in GAS)
+  var redLine = body.appendParagraph('_____________________________________________________________________________________________________________');
+  redLine.setAlignment(DocumentApp.HorizontalAlignment.LEFT);
+  redLine.setSpacingBefore(0);
+  redLine.setSpacingAfter(6);
+  var rl = redLine.editAsText();
+  rl.setFontFamily('Arial');
+  rl.setFontSize(4);
+  rl.setBold(false);
+  rl.setForegroundColor('#CC0000');
+  rl.setItalic(false);
+}
+
+// ── Questionnaire helper: question + one answer line ──────
+function appendQuestion(body, questionText, answer) {
+  var qPara = body.appendParagraph('    ' + questionText);
+  qPara.setAlignment(DocumentApp.HorizontalAlignment.LEFT);
+  qPara.setSpacingBefore(6);
+  qPara.setSpacingAfter(0);
+  var qt = qPara.editAsText();
+  qt.setFontFamily('Arial');
+  qt.setFontSize(11);
+  qt.setBold(false);
+  qt.setForegroundColor('#000000');
+  qt.setItalic(false);
+  appendAnswerLine(body, answer);
+}
+
+// ── Questionnaire helper: question + two answer lines ─────
+function appendQuestionTwoLines(body, questionText, answer1, answer2) {
+  var qPara = body.appendParagraph('    ' + questionText);
+  qPara.setAlignment(DocumentApp.HorizontalAlignment.LEFT);
+  qPara.setSpacingBefore(6);
+  qPara.setSpacingAfter(0);
+  var qt = qPara.editAsText();
+  qt.setFontFamily('Arial');
+  qt.setFontSize(11);
+  qt.setBold(false);
+  qt.setForegroundColor('#000000');
+  qt.setItalic(false);
+  appendAnswerLine(body, answer1);
+  appendAnswerLine(body, answer2);
+}
+
+// ── Questionnaire helper: single ruled answer line ────────
+// Answer text printed in RED; empty lines show gray underline only
+function appendAnswerLine(body, answer) {
+  var answerText = answer ? answer : '';
+  var aLine = body.appendParagraph(answerText);
+  aLine.setAlignment(DocumentApp.HorizontalAlignment.LEFT);
+  aLine.setSpacingBefore(0);
+  aLine.setSpacingAfter(2);
+  var at = aLine.editAsText();
+  at.setFontFamily('Arial');
+  at.setFontSize(11);
+  at.setBold(false);
+  at.setItalic(false);
+  at.setForegroundColor(answerText ? '#CC0000' : '#000000');
+  var lineStyle = {};
+  lineStyle[DocumentApp.Attribute.BORDER_COLOR] = '#aaaaaa';
+  lineStyle[DocumentApp.Attribute.BORDER_WIDTH] = 1;
+  aLine.setAttributes(lineStyle);
+}
+
+// ── Questionnaire helper: timeline item ───────────────────
+// Bold number + label + dot leaders + red answer inline
+function appendTimelineItem(body, num, label, answer) {
+  var dots     = '\u2026\u2026\u2026\u2026\u2026\u2026\u2026\u2026\u2026\u2026';
+  var fullText = num + ' ' + label + '  ' + dots + '  ' + (answer || '');
+  var tPara = body.appendParagraph(fullText);
+  tPara.setAlignment(DocumentApp.HorizontalAlignment.LEFT);
+  tPara.setSpacingBefore(3);
+  tPara.setSpacingAfter(3);
+  var tt = tPara.editAsText();
+  tt.setFontFamily('Arial');
+  tt.setFontSize(11);
+  tt.setForegroundColor('#000000');
+  tt.setItalic(false);
+  tt.setBold(0, num.length - 1, true);
+  tt.setBold(num.length, fullText.length - 1, false);
+  if (answer) {
+    var ansStart = fullText.lastIndexOf(answer);
+    if (ansStart !== -1) {
+      tt.setForegroundColor(ansStart, fullText.length - 1, '#CC0000');
+    }
+  }
+}
+
+// ═════════════════════════════════════════════════════════
+//  CONTRACT PDF — generateContractPDF
+//  (unchanged from doc 11 — kept exactly as is)
+// ═════════════════════════════════════════════════════════
+
+// ── Logo helper (used by contract PDF) ───────────────────
+function insertLogo(body) {
+  try {
+    const logoFile = DriveApp.getFileById(LOGO_FILE_ID);
+    const logoBlob = logoFile.getBlob();
+    const para     = body.insertParagraph(0, '');
+    para.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+    const img    = para.appendInlineImage(logoBlob);
+    const origW  = img.getWidth();
+    const origH  = img.getHeight();
+    const targetW = 180;
+    img.setWidth(targetW);
+    img.setHeight(Math.round(origH * (targetW / origW)));
+    body.insertParagraph(1, '').setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  } catch (e) {
+    Logger.log('Logo not found — falling back to text header. Check LOGO_FILE_ID. Error: ' + e.message);
+    const fallback = body.insertParagraph(0, 'MEJASAN MEDIA PRODUCTION');
+    fallback.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+    fallback.editAsText().setForegroundColor('#CC0000').setFontSize(18).setBold(true);
+    body.insertParagraph(1, '');
+  }
+}
+
+// ── Contract PDF helpers ──────────────────────────────────
+function addSectionHeading(body, title) {
+  body.appendParagraph('');
+  const h = body.appendParagraph(title.toUpperCase());
+  h.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  h.editAsText().setForegroundColor('#CC0000');
+}
+
+function addLabelValue(body, label, value, centered) {
+  const p = body.appendParagraph('');
+  if (centered) p.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  const t = p.editAsText();
+  t.insertText(0, label + ':  ' + (value || '—'));
+  t.setBold(0, label.length, true);
+  t.setBold(label.length + 1, t.getText().length - 1, false);
+  t.setFontSize(0, t.getText().length - 1, 11);
+}
+
+function addLabelValuePair(body, label1, val1, label2, val2) {
+  addLabelValue(body, label1, val1, false);
+  addLabelValue(body, label2, val2, false);
+}
+
+function addNarrativeBox(body, label, text) {
+  if (!text) return;
+  const lbl = body.appendParagraph(label + ':');
+  lbl.editAsText().setBold(true).setFontSize(11).setForegroundColor('#555555');
+  const p = body.appendParagraph(text);
+  p.editAsText().setFontSize(11).setItalic(true).setForegroundColor('#333333');
+  p.setIndentStart(28);
+}
+
+function addDivider(body) {
+  const d = body.appendParagraph('─────────────────────────────────────────────────────');
+  d.editAsText().setForegroundColor('#CC0000').setFontSize(8);
+  d.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+}
+
+function generateContractPDF(data) {
+  const bride  = data.bride_name || '—';
+  const groom  = data.groom_name || '—';
+  const date   = data.contract_date || data.wedding_date || '—';
+  const today  = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'd MMMM yyyy');
+  const client = data.contract_client || (bride + ' & ' + groom);
+
+  const doc  = DocumentApp.create('__temp_contract__');
+  const body = doc.getBody();
+  const baseStyle = {};
+  baseStyle[DocumentApp.Attribute.FONT_FAMILY] = 'Georgia';
+  baseStyle[DocumentApp.Attribute.FONT_SIZE]   = 11;
+  body.setAttributes(baseStyle);
+
+  // Logo at top
+  insertLogo(body);
+
+  // Tagline beneath logo
+  const tagline = body.appendParagraph('"We Deliver Quality"  ·  Photography & Videography Services  ·  Kisumu, Kenya');
+  tagline.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  tagline.editAsText().setForegroundColor('#888888').setFontSize(9).setItalic(true);
+
+  body.appendParagraph('');
+
+  const docTitle = body.appendParagraph('WEDDING VIDEOGRAPHY AND PHOTOGRAPHY CONTRACT');
+  docTitle.setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  docTitle.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+
+  addDivider(body);
+  body.appendParagraph('');
+
+  // 2-row × 3-column event details table
+  const eventTable = body.appendTable([
+    [
+      'Event:  '         + (data.contract_event_type || 'Wedding'),
+      'Event Date:  '    + date,
+      'Location:  '      + (data.contract_location || data.ceremony_venue || '—')
+    ],
+    [
+      'Client Name:  '   + client,
+      'Contact:  '       + (data.contract_phone || '—'),
+      'Total Cost: KES ' + (data.contract_cost  || '—')
+    ]
+  ]);
+  eventTable.setBorderColor('#cccccc');
+  for (var r = 0; r < 2; r++) {
+    for (var c = 0; c < 3; c++) {
+      var cell = eventTable.getCell(r, c);
+      cell.editAsText().setFontSize(11).setBold(false);
+      cell.setPaddingTop(6);
+      cell.setPaddingBottom(6);
+      cell.setPaddingLeft(8);
+      cell.setPaddingRight(8);
+    }
+  }
+
+  body.appendParagraph('');
+
+  // Intro paragraph
+  const partiesPara = body.appendParagraph(
+    "This Agreement is made between Mejasan Media Production (hereafter referred to as 'the " +
+    "COMPANY') and " + client + " (hereafter referred to as 'the CLIENT') for photography " +
+    "and videography services for the wedding of " + bride + " and " + groom + " on " + date + "."
+  );
+  partiesPara.editAsText().setFontSize(11).setItalic(true).setForegroundColor('#444444');
+
+  addSectionHeading(body, 'Terms & Conditions');
+
+  const clauses = [
+    { num: '1. Entire Agreement',
+      text: 'This contract represents the full understanding between the COMPANY and CLIENT. Any changes must be made in writing and signed by both parties.' },
+    { num: '2. Booking & Payments',
+      text: 'A 75% deposit secures your booking. The remaining 25% is due before delivery of the final products. In case of cancellation, 15% of the deposit is non-refundable. Any other costs already incurred must also be covered.' },
+    { num: '3. Schedule & Timing',
+      text: 'The CLIENT agrees to confirm the event schedule at least one week in advance. Shooting starts and ends at the agreed times. If there is a delay, coverage ends as scheduled unless extended — extra charges may apply.' },
+    { num: '4. Travel & Logistics',
+      text: 'Travel, accommodation, or transport costs may apply based on the event location. These will be communicated in advance.' },
+    { num: '5. Responsibilities & Limitations',
+      text: 'The COMPANY is not liable for issues beyond its control (e.g. guest interference, weather, venue restrictions, or delays). The CLIENT is responsible for acquiring any necessary permits or permissions.' },
+    { num: '6. Safety',
+      text: 'The COMPANY reserves the right to stop coverage if its crew experiences inappropriate or unsafe behaviour. This is to ensure safety for all involved.' },
+    { num: '7. Image Editing & Delivery',
+      text: 'The COMPANY will select and edit the best images. Delivery will be completed within two months after the event, assuming full payment. Physical items should be collected within this period. A 1% monthly charge will apply for uncollected items after two months.' },
+    { num: '8. Unforeseen Circumstances',
+      text: 'If the COMPANY is unable to perform due to illness, equipment failure, or unforeseen events, efforts will be made to find a replacement. If not possible, liability is limited to a refund of payments made.' }
+  ];
+
+  clauses.forEach(function(c) {
+    const heading = body.appendParagraph(c.num);
+    heading.editAsText().setBold(true).setFontSize(11).setForegroundColor('#0a0a0a');
+    const content = body.appendParagraph(c.text);
+    content.editAsText().setFontSize(11).setForegroundColor('#3a3a3a');
+    content.setIndentStart(18);
+    body.appendParagraph('');
+  });
+
+  // Clause 9: Copyright & Consent with checkbox rendering
+  const clause9Head = body.appendParagraph('9. Copyright & Usage (Including Consent to Share):');
+  clause9Head.editAsText().setBold(true).setFontSize(11).setForegroundColor('#0a0a0a');
+
+  const clause9Body = body.appendParagraph(
+    'Upon final delivery, the CLIENT holds full usage rights. The COMPANY may share select content for promotional purposes. Please indicate your preference:'
+  );
+  clause9Body.editAsText().setFontSize(11).setForegroundColor('#3a3a3a');
+  clause9Body.setIndentStart(18);
+
+  body.appendParagraph('');
+
+  const consentYes = (data.media_consent || '').toLowerCase().indexOf('yes') !== -1;
+  const boxYes = consentYes ? '\u2611' : '\u2610';
+  const boxNo  = consentYes ? '\u2610' : '\u2611';
+
+  const consentLine1 = body.appendParagraph(boxYes + '  YES — I give Mejasan Media Production permission to use selected content from my event for promotional purposes.');
+  consentLine1.editAsText().setFontSize(11).setForegroundColor('#222222');
+  consentLine1.setIndentStart(28);
+
+  const consentLine2 = body.appendParagraph(boxNo + '  NO — I prefer my content to remain private and not be shared publicly.');
+  consentLine2.editAsText().setFontSize(11).setForegroundColor('#222222');
+  consentLine2.setIndentStart(28);
+
+  const consentNote = body.appendParagraph('Your choice will be respected.');
+  consentNote.editAsText().setFontSize(10).setForegroundColor('#888888').setItalic(true);
+  consentNote.setIndentStart(28);
+
+  body.appendParagraph('');
+
+  // Reference number line
+  const refHead = body.appendParagraph('REFERENCE:');
+  refHead.editAsText().setBold(true).setFontSize(11);
+  const refLine = body.appendParagraph('This agreement refers to Quote/Invoice No: ____________________________');
+  refLine.editAsText().setFontSize(11).setForegroundColor('#3a3a3a');
+  refLine.setIndentStart(18);
+
+  body.appendParagraph('');
+
+  const legalNote = body.appendParagraph(
+    'By signing this contract, Mejasan Media Production and the CLIENT agree to all terms and conditions stated above and in the related invoice.'
+  );
+  legalNote.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  legalNote.editAsText().setFontSize(10).setForegroundColor('#555555').setItalic(true);
+
+  addDivider(body);
+  body.appendParagraph('');
+
+  // Signature table: 1 row × 2 columns (Client | Company)
+  const sigTable = body.appendTable([
+    [
+      buildSigCell('ACCEPTED', 'Client',      data.sig_client_name,  data.sig_witness_name,  data.sig_client_date,  data.sig_client_signed,  data.sig_witness_signed),
+      buildSigCell('ACCEPTED', 'Company Rep', data.sig_company_name || 'Mejasan Media Production', data.sig_compwit_name, data.sig_company_date, data.sig_company_signed, data.sig_compwit_signed)
+    ]
+  ]);
+  sigTable.setBorderColor('#cccccc');
+  for (var sc = 0; sc < 2; sc++) {
+    var sigCell = sigTable.getCell(0, sc);
+    sigCell.editAsText().setFontSize(11);
+    sigCell.setPaddingTop(12);
+    sigCell.setPaddingBottom(12);
+    sigCell.setPaddingLeft(12);
+    sigCell.setPaddingRight(12);
+  }
+
+  body.appendParagraph('');
+  addDivider(body);
+
+  const footer = body.appendParagraph('Mejasan Media Production  ·  We Deliver Quality  ·  Kisumu, Kenya  ·  Contract generated ' + today);
+  footer.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  footer.editAsText().setFontSize(8).setForegroundColor('#888888');
+
+  doc.saveAndClose();
+  const docFile = DriveApp.getFileById(doc.getId());
+  const pdfBlob = docFile.getAs('application/pdf');
+  pdfBlob.setName('Contract — ' + bride + ' & ' + groom + ' — ' + (data.wedding_date || 'Date') + '.pdf');
+  docFile.setTrashed(true);
+  return pdfBlob;
+}
+
+// Signature cell builder (contract)
+function buildSigCell(role, partyLabel, name, witnessName, date, signed, witnessSigned) {
+  return role + '\n\n'
+    + partyLabel + ':      ' + (name        || '___________________________') + '\n\n'
+    + 'Sign:           ___________________________\n\n'
+    + 'Witness:      ' + (witnessName  || '___________________________') + '\n\n'
+    + 'Sign:           ___________________________\n\n'
+    + 'Date:           ' + (date        || '___________________________');
+}
+
+// ═════════════════════════════════════════════════════════
+//  EMAIL TEMPLATES
+// ═════════════════════════════════════════════════════════
+function buildMejasanEmailHTML(data) {
+  return '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">'
+    + '<div style="background:#0a0a0a;padding:24px 32px;border-bottom:3px solid #CC0000;">'
+    + '<div style="color:#CC0000;font-size:18px;font-weight:bold;">MEJASAN MEDIA PRODUCTION</div>'
+    + '<div style="color:#666;font-size:11px;margin-top:4px;">NEW BOOKING RECEIVED</div></div>'
+    + '<div style="padding:28px 32px;background:#fff;border:1px solid #e0dbd0;">'
+    + '<h2 style="font-size:20px;color:#1a1a1a;">' + (data.bride_name || '') + ' &amp; ' + (data.groom_name || '') + '</h2>'
+    + '<p style="color:#888;font-size:13px;">' + (data.wedding_date || '') + ' &nbsp;·&nbsp; ' + (data.ceremony_venue || '') + '</p>'
+    + '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:16px;">'
+    + '<tr><td style="padding:8px 0;border-bottom:1px solid #f0ece4;color:#888;width:40%;">Package</td>'
+    +     '<td style="padding:8px 0;border-bottom:1px solid #f0ece4;">' + (data.selected_package || '—') + '</td></tr>'
+    + '<tr><td style="padding:8px 0;border-bottom:1px solid #f0ece4;color:#888;">Total Cost</td>'
+    +     '<td style="padding:8px 0;border-bottom:1px solid #f0ece4;">KES ' + (data.contract_cost || '—') + '</td></tr>'
+    + '<tr><td style="padding:8px 0;border-bottom:1px solid #f0ece4;color:#888;">Phone</td>'
+    +     '<td style="padding:8px 0;border-bottom:1px solid #f0ece4;">' + (data.contract_phone || '—') + '</td></tr>'
+    + '<tr><td style="padding:8px 0;color:#888;">Client Email</td>'
+    +     '<td style="padding:8px 0;">' + (data.client_email || '—') + '</td></tr>'
+    + '</table></div>'
+    + '<div style="background:#0a0a0a;padding:14px 32px;text-align:center;font-size:10px;color:#555;">MEJASAN MEDIA PRODUCTION &nbsp;·&nbsp; WE DELIVER QUALITY</div></div>';
+}
+
+function buildClientEmailHTML(data) {
+  return '<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">'
+    + '<div style="background:#0a0a0a;padding:24px 32px;border-bottom:3px solid #CC0000;">'
+    + '<div style="color:#CC0000;font-size:18px;font-weight:bold;">MEJASAN MEDIA PRODUCTION</div>'
+    + '<div style="color:#666;font-size:11px;margin-top:4px;">BOOKING CONFIRMATION</div></div>'
+    + '<div style="padding:28px 32px;background:#fff;border:1px solid #e0dbd0;">'
+    + '<h2 style="font-size:20px;color:#1a1a1a;">Your booking is confirmed! 🎉</h2>'
+    + '<p style="color:#555;font-size:14px;line-height:1.7;">Dear ' + (data.bride_name || 'Client') + ',<br/><br/>'
+    + 'Thank you for choosing Mejasan Media Production. Please find attached your Wedding Planning Summary and Contract.</p>'
+    + '<div style="background:#fafaf7;border-left:3px solid #CC0000;padding:16px 20px;margin:20px 0;">'
+    + '<strong>' + (data.bride_name || '') + ' &amp; ' + (data.groom_name || '') + '</strong><br/>'
+    + (data.wedding_date || '') + ' &nbsp;·&nbsp; ' + (data.ceremony_venue || '') + '<br/>'
+    + 'Package: ' + (data.selected_package || '—') + '</div>'
+    + '<p style="font-size:13px;color:#1a1a1a;font-style:italic;">"We Deliver Quality"</p></div>'
+    + '<div style="background:#0a0a0a;padding:14px 32px;text-align:center;font-size:10px;color:#555;">MEJASAN MEDIA PRODUCTION &nbsp;·&nbsp; KISUMU, KENYA</div></div>';
+}
+
+// ═════════════════════════════════════════════════════════
+//  TEST FUNCTION — run manually from the Apps Script editor
+// ═════════════════════════════════════════════════════════
+function testPDFGeneration() {
+  const testData = {
+    bride_name: 'Amina Kamau', groom_name: 'David Mwangi',
+    wedding_date: '2025-08-16', theme_colors: 'Ivory, Gold, Dusty Rose',
+    wedding_theme: 'Royal', bride_prep_location: 'Sankara Nairobi',
+    groom_prep_location: 'Villa Rosa Kempinski',
+    ceremony_venue: 'All Saints Cathedral, Nairobi',
+    reception_venue: 'Tamarind Tree Hotel, Karen',
+    bride_prep_time: '07:00', groom_prep_time: '08:00',
+    ceremony_time: '11:00', reception_time: '14:00', end_time: '22:00',
+    photo_style: 'Editorial', video_style: 'Cinematic',
+    style_references: 'Natural light, airy and romantic.',
+    style_avoid: 'No harsh flash inside the church.',
+    bride_parents: 'Margaret & James Kamau', groom_parents: 'Grace & Peter Mwangi',
+    best_man: 'Brian Otieno', maid_of_honour: 'Joyce Njeri',
+    vip_guests: 'Cabinet Secretary Hon. Wanjiku',
+    family_groupings: "Bride + Bride's Parents | Groom + Groom's Parents | Full Bridal Party",
+    highlight_length: '5–8 minutes', documentary_edit: 'Yes',
+    pa_system: 'Yes', sound_contact: 'DJ Kariuki — 0722 000 000',
+    live_performances: 'Surprise flash mob by groomsmen.',
+    planner_name: 'Seline Events', planner_contact: '+254 711 222 333',
+    mc_name: 'MC Kariuki', mc_contact: '+254 700 111 222',
+    church_coord_name: 'Rev. Muthoni', church_coord_contact: '+254 733 444 555',
+    venue_manager_name: 'Paul Gitonga', venue_manager_contact: '+254 722 888 999',
+    how_you_met: 'We met at university during a photography club meeting in 2018.',
+    proposal_story: 'David proposed at sunset on the Maasai Mara!',
+    special_songs: 'Perfect – Ed Sheeran / Nakupenda – Sauti Sol',
+    surprises: 'Groomsmen flash mob and a slideshow at reception.',
+    selected_package: 'Premium Full-Day Coverage',
+    additional_services: 'Drone footage, Photo booth',
+    delivery_timeline: 'Within 8 weeks',
+    client_email: 'imamai.w@gmail.com',
+    contract_event_type: 'Wedding', contract_date: '2025-08-16',
+    contract_location: 'Nairobi, Kenya', contract_cost: '180,000',
+    contract_client: 'Amina & David Kamau-Mwangi',
+    contract_phone: '+254 712 345 678',
+    media_consent: 'Yes – I give permission',
+    sig_client_name:  'Amina Wanjiku Kamau',      sig_client_date:  '2025-06-01', sig_client_signed:  'Yes',
+    sig_witness_name: 'Joyce Njeri',              sig_witness_date: '2025-06-01', sig_witness_signed: 'Yes',
+    sig_company_name: 'Mejasan Media Production', sig_company_date: '2025-06-01', sig_company_signed: 'Yes',
+    sig_compwit_name: 'Brian Otieno',             sig_compwit_date: '2025-06-01', sig_compwit_signed: 'Yes',
+    submitted_at: new Date().toISOString()
+  };
+
+  saveToSheet(testData);
+  const s1 = generateSummaryPDF(testData);
+  const c1 = generateContractPDF(testData);
+  saveToDrive(testData, s1, c1);
+  const s2 = generateSummaryPDF(testData);
+  const c2 = generateContractPDF(testData);
+  sendEmails(testData, s2, c2);
+  Logger.log('✅ Done. Check Drive → "' + DRIVE_FOLDER + '" and inbox.');
+}
