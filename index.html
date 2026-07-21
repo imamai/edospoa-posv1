@@ -477,6 +477,17 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
     </div>
   </div>
 
+  <!-- Client Detail / Statement Modal -->
+  <div class="modal-bg" id="client-detail-modal" onclick="if(event.target===this)closeModal('client-detail-modal')">
+    <div class="modal" style="width:920px;max-width:97vw;max-height:92vh;overflow-y:auto">
+      <div class="modal-hdr">
+        <span><i class="ti ti-user-circle" style="color:var(--blue)"></i> <span id="cd-title">Client</span></span>
+        <button class="btn btn-outline btn-sm" onclick="closeModal('client-detail-modal')"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:18px" id="client-detail-body"></div>
+    </div>
+  </div>
+
   <!-- Expense Modal -->
   <div class="modal-bg" id="expense-modal">
     <div class="modal" style="width:480px;max-width:95vw">
@@ -496,6 +507,29 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
         <button class="btn btn-outline btn-sm" onclick="closeModal('svc-picker-modal')"><i class="ti ti-x"></i></button>
       </div>
       <div style="padding:16px" id="svc-picker-body"></div>
+    </div>
+  </div>
+
+  <!-- Custom (off-menu) Item Modal -->
+  <div class="modal-bg" id="custom-item-modal" onclick="if(event.target===this)closeModal('custom-item-modal')">
+    <div class="modal" style="width:440px;max-width:95vw">
+      <div class="modal-hdr">
+        <span><i class="ti ti-plus" style="color:var(--red)"></i> Add Custom Item</span>
+        <button class="btn btn-outline btn-sm" onclick="closeModal('custom-item-modal')"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:18px;display:grid;gap:10px">
+        <div><label>Item Name *</label><input id="ci-name-in" placeholder="e.g. Extra hour on-site"/></div>
+        <div><label>Description <span style="font-weight:400;color:var(--muted)">— optional, printed under the item name</span></label><input id="ci-desc-in" placeholder="Brief note about this item"/></div>
+        <div class="two-col">
+          <div><label>Department *</label><select id="ci-dept-sel"><option value="">— Select Department —</option></select></div>
+          <div><label>Qty</label><input type="number" id="ci-qty-in" value="1" min="1"/></div>
+        </div>
+        <div><label>Price (KSh) *</label><input type="number" id="ci-price-in" placeholder="0" min="0" step="0.01"/></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-red" style="flex:1;justify-content:center" onclick="addCustomItemToCart()"><i class="ti ti-check"></i> Add to Cart</button>
+          <button class="btn btn-outline" onclick="closeModal('custom-item-modal')">Cancel</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -529,6 +563,17 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
           <button class="btn btn-outline" onclick="closeModal('service-modal')">Cancel</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Service Drill-down Modal -->
+  <div class="modal-bg" id="svc-drilldown-modal" onclick="if(event.target===this)closeModal('svc-drilldown-modal')">
+    <div class="modal" style="width:780px;max-width:96vw;max-height:88vh;overflow-y:auto">
+      <div class="modal-hdr">
+        <span><i class="ti ti-list-details" style="color:var(--purple)"></i> <span id="svc-drilldown-title">Service Details</span></span>
+        <button class="btn btn-outline btn-sm" onclick="closeModal('svc-drilldown-modal')"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:18px" id="svc-drilldown-body"></div>
     </div>
   </div>
 
@@ -1737,6 +1782,8 @@ let selectedClientIds = new Set(), selectedExpenseIds = new Set(), selectedInvId
 let activePeriod = 'all', mpesaPhone = '', mpesaMode = 'stk';
 let periodFrom = '', periodTo = '';
 let svcSearch = '', svcDeptFilter = 'all';
+let svcPerfSearch = '', svcPerfDeptFilter = 'all', svcPerfSort = 'revenue';
+let _svcPerfAgg = {}, _svcPerfInvoices = [];
 let analyticsChart = null;
 let dashboardChart = null;
 let dashChartPeriod = 'month'; // default chart period: today|week|month|last7|last30|year
@@ -2609,9 +2656,14 @@ function renderPOS() {
           <button class="btn btn-outline btn-sm" onclick="startNewSale()" title="Clear cart and start a fresh sale" style="padding:3px 8px;font-size:11px"><i class="ti ti-refresh"></i> New Sale</button>
         </div>
         <div class="cart-info">
-          <div><label>Client</label><select id="cart-client" onchange="onClientSelect(this.value)">${clientOpts}</select></div>
+          <select id="cart-client" onchange="onClientSelect(this.value)" style="display:none">${clientOpts}</select>
           <div class="cart-row-info">
-            <div><label>Client Name *</label><input id="cart-cname" placeholder="Auto or type name"/></div>
+            <div style="position:relative">
+              <label>Client Name *</label>
+              <input id="cart-cname" placeholder="Type to search existing clients…" autocomplete="off"
+                oninput="onClientNameInput(this.value)" onfocus="onClientNameInput(this.value)" onblur="setTimeout(hideClientSuggestions,150)"/>
+              <div id="client-suggest-box" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.15);margin-top:2px;max-height:220px;overflow-y:auto"></div>
+            </div>
             <div><label>Phone</label><input id="cart-cphone" placeholder="+254 7XX XXX XXX"/></div>
           </div>
           <div class="cart-row-info">
@@ -2631,6 +2683,10 @@ function renderPOS() {
           </div>
         </div>
         <div class="cart-items" id="cart-items"><div style="color:var(--muted);font-size:11px;text-align:center;padding:16px">Tap a service to add</div></div>
+        ${hasPerm('pos.edit_price') ? `<div style="padding:0 12px">
+          <button onclick="openCustomItemModal()" title="Add a one-off item for this sale that isn't in the service list"
+            style="width:100%;background:none;border:1px dashed var(--border);border-radius:5px;padding:6px;font-size:11px;color:var(--muted);cursor:pointer;margin:6px 0"><i class="ti ti-plus"></i> Custom Item</button>
+        </div>` : ''}
         <div class="cart-foot">
           <div class="cf-row"><span>Subtotal</span><span id="cf-sub">KSh 0</span></div>
           <div class="cf-row"><span>Discount</span><span id="cf-disc" style="color:var(--green)">- KSh 0</span></div>
@@ -2736,6 +2792,36 @@ function addToCart(id) {
   updateCartUI();
 }
 function removeCart(id) { cart = cart.filter(c => c.id !== id); updateCartUI(); }
+
+// Ad-hoc items not in the SERVICES catalog (e.g. a one-off charge) — gated
+// behind pos.edit_price since it means entering an arbitrary price by hand.
+function openCustomItemModal() {
+  if (!hasPerm('pos.edit_price')) return;
+  document.getElementById('ci-name-in').value = '';
+  document.getElementById('ci-desc-in').value = '';
+  document.getElementById('ci-price-in').value = '';
+  document.getElementById('ci-qty-in').value = 1;
+  const sel = document.getElementById('ci-dept-sel');
+  const vd = visibleDepts();
+  sel.innerHTML = '<option value="">— Select Department —</option>' + vd.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+  sel.value = vd.length === 1 ? vd[0].id : '';
+  openModal('custom-item-modal');
+}
+
+function addCustomItemToCart() {
+  if (!hasPerm('pos.edit_price')) return;
+  const name  = document.getElementById('ci-name-in').value.trim();
+  const desc  = document.getElementById('ci-desc-in').value.trim();
+  const dept  = document.getElementById('ci-dept-sel').value;
+  const price = parseFloat(document.getElementById('ci-price-in').value) || 0;
+  const qty   = Math.max(1, parseInt(document.getElementById('ci-qty-in').value) || 1);
+  if (!name)  { alert('Please enter an item name.'); return; }
+  if (!dept)  { alert('Please select a department.'); return; }
+  if (price <= 0) { alert('Please enter a valid price.'); return; }
+  cart.push({ id: 'custom-' + uid(), name, desc, dept, price, qty, custom: true });
+  updateCartUI();
+  closeModal('custom-item-modal');
+}
 
 function updateCartPaidDisplay() {
   const { total } = recalc();
@@ -2945,6 +3031,56 @@ function onClientSelect(id) {
     if (cn) cn.value = ''; if (cp) cp.value = '';
     if (ce) ce.value = ''; if (cw) cw.value = '';
   }
+}
+
+// Live client search behind the "Client Name" field — typing shows matching
+// existing clients; picking one reuses onClientSelect() to auto-fill the rest.
+function onClientNameInput(val) {
+  const box = document.getElementById('client-suggest-box');
+  if (!box) return;
+  const q = (val || '').trim().toLowerCase();
+
+  // If the name no longer matches the previously-picked client, decouple
+  // the linked clientId. Only clear phone/email/whatsapp if they still hold
+  // exactly what was auto-filled — don't clobber a manual edit.
+  const sel = document.getElementById('cart-client');
+  if (sel && sel.value) {
+    const picked = clients.find(c => c.id === sel.value);
+    if (!picked || picked.name.toLowerCase() !== q) {
+      sel.value = '';
+      if (picked) {
+        const cp = document.getElementById('cart-cphone');
+        const ce = document.getElementById('cart-cemail');
+        const cw = document.getElementById('cart-cwhatsapp');
+        if (cp && cp.value === (picked.phone || '')) cp.value = '';
+        if (ce && ce.value === (picked.email || '')) ce.value = '';
+        if (cw && cw.value === (picked.phone || '')) cw.value = '';
+      }
+    }
+  }
+
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const matches = clients.filter(c =>
+    c.name.toLowerCase().includes(q) || (c.phone || '').includes(q)
+  ).slice(0, 8);
+  if (!matches.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.innerHTML = matches.map(c => `
+    <div onmousedown="pickClientSuggestion('${c.id}')" onmouseover="this.style.background='#f8f8f6'" onmouseout="this.style.background='#fff'"
+      style="padding:8px 10px;cursor:pointer;font-size:12px;border-bottom:1px solid #f5f5f3">
+      <div style="font-weight:600">${c.name}</div>
+      <div style="color:var(--muted);font-size:11px">${c.phone || '—'}${c.email ? ' · ' + c.email : ''}</div>
+    </div>`).join('');
+  box.style.display = 'block';
+}
+function hideClientSuggestions() {
+  const box = document.getElementById('client-suggest-box');
+  if (box) box.style.display = 'none';
+}
+function pickClientSuggestion(id) {
+  const sel = document.getElementById('cart-client');
+  if (sel) sel.value = id;
+  onClientSelect(id);
+  hideClientSuggestions();
 }
 
 async function checkout() {
@@ -3841,21 +3977,139 @@ async function downloadInvoicePDF(invId) {
   const inv = invoices.find(i => i.id === invId); if (!inv) return;
   const el = document.createElement('div');
   el.innerHTML = buildInvoiceHTML(inv);
-  html2pdf().set({ margin:10, filename:inv.id+'-invoice.pdf', image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{orientation:'portrait',unit:'mm',format:'a4'} }).from(el).save();
+  return html2pdf().set({ margin:10, filename:inv.id+'-invoice.pdf', image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{orientation:'portrait',unit:'mm',format:'a4'} }).from(el).save();
 }
 
 async function downloadReceiptPDF(invId) {
   const inv = invoices.find(i => i.id === invId); if (!inv) return;
   const el = document.createElement('div');
   el.innerHTML = buildReceiptHTML(inv);
-  html2pdf().set({ margin:5, filename:inv.id+'-receipt.pdf', image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{orientation:'portrait',unit:'mm',format:[80,200]} }).from(el).save();
+  return html2pdf().set({ margin:5, filename:inv.id+'-receipt.pdf', image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{orientation:'portrait',unit:'mm',format:[80,200]} }).from(el).save();
 }
 
 async function downloadQuotationPDF(invId) {
   const inv = invoices.find(i => i.id === invId); if (!inv) return;
   const el = document.createElement('div');
   el.innerHTML = buildQuotationHTML(inv);
-  html2pdf().set({ margin:10, filename:'QT-'+inv.id+'-quotation.pdf', image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{orientation:'portrait',unit:'mm',format:'a4'} }).from(el).save();
+  return html2pdf().set({ margin:10, filename:'QT-'+inv.id+'-quotation.pdf', image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{orientation:'portrait',unit:'mm',format:'a4'} }).from(el).save();
+}
+
+// Picks the right PDF builder for a document regardless of its type — used
+// wherever a client's docs are handled generically (e.g. Client Detail).
+function downloadDocPDF(docId) {
+  const d = invoices.find(i => i.id === docId);
+  if (!d) return Promise.resolve();
+  if (d.type === 'quotation') return downloadQuotationPDF(d.id);
+  if (d.type === 'cash_sale') return downloadReceiptPDF(d.id);
+  return downloadInvoicePDF(d.id);
+}
+
+// A one-page STATEMENT for a set of documents — a summary line per doc
+// (# / type / date / status / total / balance) plus a totals line, not the
+// full itemized content of each one. This is what gets downloaded, emailed,
+// and WhatsApp'd for a bulk selection: e.g. "here's what you still owe",
+// not a re-send of every invoice's full detail. Only the documents passed
+// in appear — always the caller's current selection. Styled with inline
+// CSS only (no dependency on the app's stylesheet) so it renders correctly
+// both inside the app (for PDF capture) and in a standalone preview popup.
+function buildDocsStatementHTML(client, docs) {
+  const S = SETTINGS;
+  const invDocs = docs.filter(d => d.type !== 'quotation');
+  const invBalTotal = invDocs.reduce((a, d) => a + invBalance(d), 0);
+  const grandTotal = docs.reduce((a, d) => a + (d.total || 0), 0);
+
+  const rows = docs.map(d => {
+    const isQt = d.type === 'quotation';
+    const bal = isQt ? null : invBalance(d);
+    const typeLabel = isQt ? 'Quotation' : d.type === 'cash_sale' ? 'Cash Sale' : 'Invoice';
+    return `<tr>
+      <td style="padding:7px 8px;border-bottom:1px solid #eee">${d.id}</td>
+      <td style="padding:7px 8px;border-bottom:1px solid #eee;color:#555">${typeLabel}</td>
+      <td style="padding:7px 8px;border-bottom:1px solid #eee;color:#555">${d.date || '—'}</td>
+      <td style="padding:7px 8px;border-bottom:1px solid #eee">${invStatus(d)}</td>
+      <td style="padding:7px 8px;border-bottom:1px solid #eee;text-align:right">KSh ${Number(d.total || 0).toLocaleString()}</td>
+      <td style="padding:7px 8px;border-bottom:1px solid #eee;text-align:right${bal > 0 ? ';color:#dc2626;font-weight:700' : ''}">${bal == null ? '—' : 'KSh ' + Number(bal).toLocaleString()}</td>
+    </tr>`;
+  }).join('');
+
+  return `<div style="background:#fff;padding:40px 48px;max-width:820px;font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#111;line-height:1.5">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;border-bottom:2px solid #111;padding-bottom:16px">
+      <div>
+        ${S.logoDataUrl ? `<img src="${S.logoDataUrl}" style="max-height:50px;max-width:170px;object-fit:contain;margin-bottom:8px;display:block"/>` : ''}
+        <div style="font-weight:700;font-size:15px">${S.bizName || ''}</div>
+        <div style="font-size:10px;color:#555;line-height:1.6">
+          ${S.bizLocation || ''}<br/>
+          ${S.bizPhone1 || ''}${S.bizPhone2 ? ' / ' + S.bizPhone2 : ''}<br/>
+          ${S.email || ''}${S.website ? ' · ' + S.website : ''}
+          ${S.kraPin ? `<br/>KRA PIN: ${S.kraPin}` : ''}
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:18px;font-weight:800;letter-spacing:.5px">STATEMENT</div>
+        <div style="font-size:10px;color:#555">${new Date().toLocaleDateString('en-KE', { day:'2-digit', month:'short', year:'numeric' })}</div>
+      </div>
+    </div>
+    <div style="margin-bottom:18px">
+      <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px">Statement For</div>
+      <div style="font-weight:700;font-size:13px">${client.name}</div>
+      <div style="font-size:11px;color:#555">${client.phone || ''}${client.email ? ' · ' + client.email : ''}</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="background:#f5f5f3">
+        <th style="text-align:left;padding:8px;border-bottom:2px solid #ddd;font-size:10px;text-transform:uppercase;color:#666">Doc #</th>
+        <th style="text-align:left;padding:8px;border-bottom:2px solid #ddd;font-size:10px;text-transform:uppercase;color:#666">Type</th>
+        <th style="text-align:left;padding:8px;border-bottom:2px solid #ddd;font-size:10px;text-transform:uppercase;color:#666">Date</th>
+        <th style="text-align:left;padding:8px;border-bottom:2px solid #ddd;font-size:10px;text-transform:uppercase;color:#666">Status</th>
+        <th style="text-align:right;padding:8px;border-bottom:2px solid #ddd;font-size:10px;text-transform:uppercase;color:#666">Total</th>
+        <th style="text-align:right;padding:8px;border-bottom:2px solid #ddd;font-size:10px;text-transform:uppercase;color:#666">Balance</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="margin-top:18px;display:flex;justify-content:flex-end;gap:32px">
+      <div style="text-align:right">
+        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.4px">Total Billed</div>
+        <div style="font-size:15px;font-weight:700">KSh ${grandTotal.toLocaleString()}</div>
+      </div>
+      ${invBalTotal > 0 ? `<div style="text-align:right">
+        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.4px">Balance Due</div>
+        <div style="font-size:15px;font-weight:700;color:#dc2626">KSh ${invBalTotal.toLocaleString()}</div>
+      </div>` : ''}
+    </div>
+  </div>`;
+}
+
+// One PDF for the statement — used for bulk download as well as the bulk
+// email/WhatsApp send so the attachment matches the on-screen preview.
+async function generateStatementPDFBlob(client, docs, filename) {
+  return generatePDFAsBlob(buildDocsStatementHTML(client, docs), filename);
+}
+
+// Standalone popup preview of the statement — lets the user check exactly
+// what will be downloaded/sent before committing to either action.
+function previewSelectedClientDocs() {
+  const c = clients.find(x => x.id === clientDetailId);
+  const docs = _selectedClientDocsSorted();
+  if (!c || !docs.length) { alert('Select at least one document first.'); return; }
+  const win = window.open('', '_blank', 'width=900,height=800');
+  if (!win) { alert('Allow popups to preview the statement.'); return; }
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Statement Preview — ${c.name}</title>
+    <style>
+      body{background:#e9e9e7;margin:0;padding:24px 0}
+      .preview-toolbar{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid #ddd;padding:10px 20px;display:flex;gap:8px;align-items:center;margin-bottom:20px;font-family:Arial,sans-serif}
+      .preview-toolbar button{padding:6px 14px;border-radius:5px;cursor:pointer;font-size:12px;border:1px solid #d1d5db;background:#f3f4f6;color:#111}
+      .preview-toolbar button.primary{background:#C8252A;color:#fff;border-color:#C8252A}
+      @media print{.preview-toolbar{display:none}}
+    </style>
+  </head><body>
+    <div class="preview-toolbar">
+      <strong style="font-size:13px">Preview — ${docs.length} document(s) selected</strong>
+      <span style="flex:1"></span>
+      <button class="primary" onclick="window.print()">Print / Save as PDF</button>
+      <button onclick="window.close()">Close</button>
+    </div>
+    <div style="display:flex;justify-content:center">${buildDocsStatementHTML(c, docs)}</div>
+  </body></html>`);
+  win.document.close();
 }
 
 // ── QUOTATION → INVOICE CONVERSION ──────────────────────
@@ -3990,7 +4244,10 @@ function _renderEditItems() {
   tbody.innerHTML = _editInvItems.length
     ? _editInvItems.map((item, idx) => `
         <tr>
-          <td><input style="width:100%;min-width:120px" value="${(item.name||'').replace(/"/g,'&quot;')}" oninput="_editItemField(${idx},'name',this.value)"/></td>
+          <td>
+            <input style="width:100%;min-width:120px" value="${(item.name||'').replace(/"/g,'&quot;')}" oninput="_editItemField(${idx},'name',this.value)"/>
+            <input style="width:100%;min-width:120px;margin-top:3px;font-size:10.5px;color:var(--muted)" placeholder="Description (optional)" value="${(item.desc||'').replace(/"/g,'&quot;')}" oninput="_editItemField(${idx},'desc',this.value)"/>
+          </td>
           <td style="font-size:11px;color:var(--muted);white-space:nowrap">${DEPTS.find(d=>d.id===item.dept)?.name||item.dept||'—'}</td>
           <td><input type="number" style="width:56px" value="${item.qty||1}" min="1" oninput="_editItemField(${idx},'qty',+this.value||1)"/></td>
           <td><input type="number" style="width:100px" value="${item.price||0}" min="0" step="0.01" oninput="_editItemField(${idx},'price',+this.value||0)"/></td>
@@ -4045,7 +4302,7 @@ function _addEditItemFromPick() {
   const s = SERVICES.find(x => x.id === svcId); if (!s) return;
   const existing = _editInvItems.find(x => x.id === s.id);
   if (existing) { existing.qty = (+(existing.qty) || 1) + 1; }
-  else { _editInvItems.push({ id: s.id, name: s.name, price: s.price || 0, cost: s.cost || 0, qty: 1, dept: s.dept || '' }); }
+  else { _editInvItems.push({ id: s.id, name: s.name, price: s.price || 0, cost: s.cost || 0, qty: 1, dept: s.dept || '', desc: s.desc || '' }); }
   // Reset service picker but keep department selected so adding multiple services is quick
   document.getElementById('edit-inv-svc-pick').value = '';
   _renderEditItems();
@@ -4320,12 +4577,12 @@ async function deletePayment(payId) {
 
 // ── WHATSAPP ─────────────────────────────────────────────
 async function sendInvoiceViaWhatsApp(invId, phone, clientName) {
-  await sendInvoiceAutomatedWhatsApp(invId, phone, clientName);
+  return await sendInvoiceAutomatedWhatsApp(invId, phone, clientName);
 }
 
 // ── EMAIL ────────────────────────────────────────────────
 async function sendInvoiceViaEmail(invId, email, clientName) {
-  await sendInvoiceAutomatedEmail(invId, email, clientName);
+  return await sendInvoiceAutomatedEmail(invId, email, clientName);
 }
 
 // ── INVOICES PAGE ────────────────────────────────────────
@@ -4829,7 +5086,7 @@ function renderClients() {
                 const referrerLabel = referrer ? referrer.name : (c.referred_by || '—');
                 return `<tr>
                   <td>${canDelete ? `<input type="checkbox" class="chk-client" value="${c.id}" onchange="toggleClientSel('${c.id}',this.checked)"/>` : `<div style="width:30px;height:30px;border-radius:50%;background:var(--red);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;color:#fff">${initials}</div>`}</td>
-                  <td style="font-weight:600">${c.name}</td>
+                  <td style="font-weight:600"><a href="#" onclick="openClientDetail('${c.id}');return false" style="color:var(--text);text-decoration:none" title="View invoices &amp; quotations">${c.name}</a></td>
                   <td>${c.phone ? `<a href="tel:${c.phone}" style="color:var(--blue);text-decoration:none">${c.phone}</a>` : '—'}</td>
                   <td style="color:var(--muted)">${c.email || '—'}</td>
                   <td>${bdStr}</td>
@@ -4840,7 +5097,8 @@ function renderClients() {
                   <td style="font-weight:600;color:${balance > 0 ? '#dc2626' : 'var(--green)'}">${fmt(balance)}</td>
                   <td style="text-align:center">${cInvs.length}</td>
                   <td style="white-space:nowrap">
-                    ${hasPerm('clients.edit') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px" onclick="openEditClient('${c.id}')" title="Edit"><i class="ti ti-pencil" style="font-size:11px"></i></button>` : ''}
+                    <button class="btn btn-sm btn-outline" style="padding:3px 7px" onclick="openClientDetail('${c.id}')" title="View invoices &amp; quotations"><i class="ti ti-eye" style="font-size:11px"></i></button>
+                    ${hasPerm('clients.edit') ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;margin-left:3px" onclick="openEditClient('${c.id}')" title="Edit"><i class="ti ti-pencil" style="font-size:11px"></i></button>` : ''}
                     ${canDelete ? `<button class="btn btn-sm btn-outline" style="padding:3px 7px;color:#dc2626;border-color:#fca5a5;margin-left:3px" onclick="deleteClient('${c.id}')" title="Delete"><i class="ti ti-trash" style="font-size:11px"></i></button>` : ''}
                   </td>
                 </tr>`;
@@ -4924,6 +5182,377 @@ function exportClientsPDF() {
     <h2>Clients List</h2><p>Exported ${new Date().toLocaleDateString('en-KE',{day:'2-digit',month:'short',year:'numeric'})} &mdash; ${_filteredClients.length} client(s)</p>
     <table><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Event</th><th>Birthday</th><th style="text-align:right">Billed</th><th style="text-align:right">Balance</th><th style="text-align:center">Inv.</th></tr></thead>
     <tbody>${rows}</tbody></table>
+    <br><button onclick="window.print()" style="padding:6px 16px;background:#C8252A;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px">Print / Save as PDF</button>
+  </body></html>`);
+  win.document.close();
+}
+
+// ── Client Detail / Statement — drill into one client's invoices & quotations,
+// bulk-select them by status, send in one shot instead of one-by-one, and
+// print a combined statement. ─────────────────────────────────────────────
+let clientDetailId = null;
+let clientDetailSelected = new Set();
+
+function _clientDocs(id) {
+  const c = clients.find(x => x.id === id);
+  if (!c) return [];
+  return invoices.filter(i =>
+    i.status !== 'Voided' && i.status !== 'draft' &&
+    (i.clientId === id || (c.phone && i.clientPhone === c.phone))
+  ).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+}
+
+function _docStatusBadge(inv) {
+  const st = invStatus(inv);
+  const stLow = String(st).toLowerCase();
+  const cls = stLow==='paid'?'badge-green':stLow==='partial'?'badge-amber':stLow==='converted'?'badge-green':
+    stLow==='pending'?'badge-blue':stLow==='sent'?'badge-blue':stLow==='accepted'?'badge-green':
+    stLow==='declined'?'badge-red':stLow==='voided'?'badge-gray':stLow==='draft'?'badge-gray':
+    stLow==='expired'?'badge-gray':'badge-red';
+  const label = String(st).charAt(0).toUpperCase() + String(st).slice(1);
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+function openClientDetail(id) {
+  const c = clients.find(x => x.id === id);
+  if (!c) return;
+  clientDetailId = id;
+  clientDetailSelected = new Set();
+  document.getElementById('cd-title').textContent = c.name;
+  renderClientDetailBody();
+  openModal('client-detail-modal');
+}
+
+function renderClientDetailBody() {
+  const body = document.getElementById('client-detail-body');
+  if (!body) return;
+  const c = clients.find(x => x.id === clientDetailId);
+  if (!c) { body.innerHTML = '<div style="color:var(--muted);padding:20px;text-align:center">Client not found</div>'; return; }
+
+  const docs    = _clientDocs(clientDetailId);
+  const invDocs = docs.filter(d => d.type !== 'quotation');
+  const qtDocs  = docs.filter(d => d.type === 'quotation');
+
+  const invTotal      = invDocs.reduce((a, d) => a + d.total, 0);
+  const invBal        = invDocs.reduce((a, d) => a + invBalance(d), 0);
+  const invCollected  = invTotal - invBal;
+  const qtTotal       = qtDocs.reduce((a, d) => a + d.total, 0);
+
+  const bdStr = c.birthday ? new Date(c.birthday + 'T00:00:00').toLocaleDateString('en-KE', { day:'2-digit', month:'short', year:'numeric' }) : '—';
+
+  body.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;justify-content:space-between;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border)">
+      <div style="font-size:11px;color:var(--muted);display:grid;gap:3px">
+        <span><i class="ti ti-phone" style="font-size:11px"></i> ${c.phone ? `<a href="tel:${c.phone}" style="color:var(--blue)">${c.phone}</a>` : '—'}</span>
+        <span><i class="ti ti-mail" style="font-size:11px"></i> ${c.email || '—'}</span>
+        <span><i class="ti ti-cake" style="font-size:11px"></i> ${bdStr}${c.event ? ' · ' + c.event : ''}</span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-outline" onclick="closeModal('client-detail-modal');openEditClient('${c.id}')"><i class="ti ti-pencil"></i> Edit Client</button>
+        <button class="btn btn-sm" style="background:#C8252A;color:#fff" onclick="printClientStatement('${c.id}')"><i class="ti ti-file-type-pdf"></i> Print Statement</button>
+      </div>
+    </div>
+
+    <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
+      <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Invoices Billed</div><div class="stat-value">${fmt(invTotal)}</div><div class="stat-sub">${invDocs.length} doc${invDocs.length === 1 ? '' : 's'}</div></div>
+      <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Collected</div><div class="stat-value">${fmt(invCollected)}</div></div>
+      <div class="stat-card" style="border-top-color:#dc2626"><div class="stat-label">Balance Due</div><div class="stat-value">${fmt(invBal)}</div></div>
+      <div class="stat-card" style="border-top-color:var(--amber)"><div class="stat-label">Quotations</div><div class="stat-value">${fmt(qtTotal)}</div><div class="stat-sub">${qtDocs.length} doc${qtDocs.length === 1 ? '' : 's'}</div></div>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px;padding:10px 12px;background:#f8f8f6;border:1px solid var(--border);border-radius:8px">
+      <span style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Select:</span>
+      <button class="btn btn-sm btn-outline" style="font-size:10px;padding:3px 9px" onclick="selectClientDocs('all')">All</button>
+      <button class="btn btn-sm btn-outline" style="font-size:10px;padding:3px 9px" onclick="selectClientDocs('unpaid')">Unpaid</button>
+      <button class="btn btn-sm btn-outline" style="font-size:10px;padding:3px 9px" onclick="selectClientDocs('partial')">Partial</button>
+      <button class="btn btn-sm btn-outline" style="font-size:10px;padding:3px 9px" onclick="selectClientDocs('paid')">Paid</button>
+      <button class="btn btn-sm btn-outline" style="font-size:10px;padding:3px 9px" onclick="selectClientDocs('quotations')">Quotations</button>
+      <button class="btn btn-sm btn-outline" style="font-size:10px;padding:3px 9px" onclick="selectClientDocs('none')">Clear</button>
+      <span style="flex:1"></span>
+      <span id="cd-sel-count" style="font-size:11px;color:var(--muted)">${clientDetailSelected.size} selected</span>
+      <button class="btn btn-sm btn-outline" onclick="previewSelectedClientDocs()" title="Preview the statement before downloading or sending it"><i class="ti ti-eye"></i> View</button>
+      <button class="btn btn-sm btn-outline" onclick="bulkDownloadClientDocs()" title="Download the statement PDF to check it before sending"><i class="ti ti-file-type-pdf" style="color:#dc2626"></i> Download PDF</button>
+      <button class="btn btn-sm btn-outline" ${!c.email ? 'disabled title="No email on file"' : ''} onclick="bulkSendClientDocs('email')"><i class="ti ti-mail" style="color:#ea4335"></i> Email Selected</button>
+      <button class="btn btn-sm btn-outline" ${!c.phone ? 'disabled title="No phone on file"' : ''} onclick="bulkSendClientDocs('whatsapp')"><i class="ti ti-brand-whatsapp" style="color:#25d366"></i> WhatsApp Selected</button>
+    </div>
+
+    ${!docs.length
+      ? '<div style="color:var(--muted);font-size:12px;text-align:center;padding:24px">No invoices or quotations for this client yet</div>'
+      : `<div style="overflow-x:auto"><table class="table" style="width:100%">
+          <thead><tr>
+            <th style="width:28px"></th><th>Doc #</th><th>Type</th><th>Date</th><th>Status</th>
+            <th style="text-align:right">Total</th><th style="text-align:right">Balance</th><th style="width:36px"></th>
+          </tr></thead>
+          <tbody>
+            ${docs.map(d => {
+              const isQt = d.type === 'quotation';
+              const bal = isQt ? 0 : invBalance(d);
+              return `<tr>
+                <td><input type="checkbox" class="chk-cd-doc" value="${d.id}" ${clientDetailSelected.has(d.id) ? 'checked' : ''} onchange="toggleClientDocSel('${d.id}',this.checked)"/></td>
+                <td style="font-weight:600">${d.id}</td>
+                <td style="font-size:11px;color:var(--muted)">${isQt ? 'Quotation' : d.type === 'cash_sale' ? 'Cash Sale' : 'Invoice'}</td>
+                <td style="font-size:11px;color:var(--muted)">${d.date || '—'}</td>
+                <td>${_docStatusBadge(d)}</td>
+                <td style="text-align:right">${fmt(d.total)}</td>
+                <td style="text-align:right${bal > 0 ? ';color:#dc2626;font-weight:600' : ''}">${isQt ? '—' : fmt(bal)}</td>
+                <td style="white-space:nowrap">
+                  <button class="btn btn-sm btn-outline" style="padding:2px 6px" onclick="downloadDocPDF('${d.id}')" title="Download PDF"><i class="ti ti-file-type-pdf" style="font-size:11px;color:#dc2626"></i></button>
+                  <button class="btn btn-sm btn-outline" style="padding:2px 6px;margin-left:3px" onclick="closeModal('client-detail-modal');openInvoice('${d.id}')" title="Open"><i class="ti ti-arrow-up-right" style="font-size:11px"></i></button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table></div>`}
+  `;
+}
+
+function toggleClientDocSel(id, checked) {
+  if (checked) clientDetailSelected.add(id); else clientDetailSelected.delete(id);
+  const cnt = document.getElementById('cd-sel-count');
+  if (cnt) cnt.textContent = clientDetailSelected.size + ' selected';
+}
+
+// Quick-select by document category so the user can grab e.g. "all Unpaid
+// invoices" in one click instead of ticking boxes one at a time.
+function selectClientDocs(mode) {
+  const docs = _clientDocs(clientDetailId);
+  if (mode === 'none') clientDetailSelected = new Set();
+  else if (mode === 'all') clientDetailSelected = new Set(docs.map(d => d.id));
+  else if (mode === 'quotations') clientDetailSelected = new Set(docs.filter(d => d.type === 'quotation').map(d => d.id));
+  else clientDetailSelected = new Set(docs.filter(d => d.type !== 'quotation' && invStatus(d).toLowerCase() === mode).map(d => d.id));
+  renderClientDetailBody();
+}
+
+// Send every selected document to the client in one action instead of
+// opening each invoice/quotation individually.
+// Sorted oldest→newest so a combined PDF/email reads like a statement.
+function _selectedClientDocsSorted() {
+  return [...clientDetailSelected].map(id => invoices.find(i => i.id === id)).filter(Boolean)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+}
+
+async function bulkSendClientDocs(channel) {
+  const c = clients.find(x => x.id === clientDetailId);
+  if (!c) return;
+  const docs = _selectedClientDocsSorted();
+  if (!docs.length) { alert('Select at least one document first.'); return; }
+  // The statement uses the client record, but falls back to whatever contact
+  // info was snapshotted on the most recent selected document if the client
+  // record itself is missing it.
+  const statementClient = {
+    ...c,
+    name:  c.name  || docs[0].clientName || '',
+    email: c.email || docs[0].clientEmail || '',
+    phone: c.phone || docs[0].clientWhatsApp || '',
+  };
+  const ok = channel === 'email'
+    ? await sendStatementEmail(statementClient, docs)
+    : await sendStatementWhatsApp(statementClient, docs);
+  alert(ok
+    ? `Sent a statement for ${docs.length} document(s) via ${channel === 'email' ? 'Email' : 'WhatsApp'}.`
+    : `Could not send via ${channel === 'email' ? 'Email' : 'WhatsApp'}. Please try again.`);
+}
+
+// One PDF statement covering every selected document — checked before
+// sending, same content the bulk email/WhatsApp send will attach.
+async function bulkDownloadClientDocs() {
+  const c = clients.find(x => x.id === clientDetailId);
+  const docs = _selectedClientDocsSorted();
+  if (!c || !docs.length) { alert('Select at least one document first.'); return; }
+  const safeName = (c.name || 'client').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '');
+  const filename = `${safeName}-statement-${new Date().toISOString().slice(0, 10)}.pdf`;
+  const el = document.createElement('div');
+  el.innerHTML = buildDocsStatementHTML(c, docs);
+  await html2pdf().set({ margin:10, filename, image:{type:'jpeg',quality:0.98}, html2canvas:{scale:2}, jsPDF:{orientation:'portrait',unit:'mm',format:'a4'} }).from(el).save();
+}
+
+// Statement email — one PDF summarizing every selected doc (not the full
+// itemized documents), sent in a single message instead of one per document.
+async function sendStatementEmail(client, docs) {
+  if (!client.email || !docs.length) { alert('Client email or documents missing'); return false; }
+  const statusMsg = createStatusMessage('📧 Generating statement PDF...');
+  try {
+    const filename = `statement-${new Date().toISOString().slice(0, 10)}.pdf`;
+    const pdfBlob = await generateStatementPDFBlob(client, docs, filename);
+    updateStatusMessage(statusMsg, '📧 Preparing email...');
+    const reader = new FileReader();
+    return await new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        updateStatusMessage(statusMsg, '✗ Timeout - PDF taking too long');
+        setTimeout(() => statusMsg.remove(), 3000);
+        resolve(false);
+      }, 8000);
+      reader.onload = async () => {
+        clearTimeout(timeoutId);
+        try {
+          const base64PDF = reader.result.split(',')[1];
+          updateStatusMessage(statusMsg, '📤 Sending email...');
+          const documents = docs.map(d => ({ id: d.id, type: d.type === 'quotation' ? 'Quotation' : d.type === 'cash_sale' ? 'Cash Sale' : 'Invoice', date: d.date, status: invStatus(d), total: d.total }));
+          const response = await fetch('/.netlify/functions/send-invoice-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: client.email, clientName: client.name, documents, pdfBase64: base64PDF, fileName: filename })
+          });
+          if (response.ok) {
+            updateStatusMessage(statusMsg, `✓ Email sent to ${client.email}!`);
+            setTimeout(() => statusMsg.remove(), 3000);
+            resolve(true);
+          } else {
+            updateStatusMessage(statusMsg, '✗ Email service unavailable');
+            setTimeout(() => statusMsg.remove(), 3000);
+            resolve(false);
+          }
+        } catch (err) {
+          console.error('Statement email send error:', err);
+          updateStatusMessage(statusMsg, `✗ Error: ${err.message}`);
+          setTimeout(() => statusMsg.remove(), 3000);
+          resolve(false);
+        }
+      };
+      reader.onerror = () => {
+        clearTimeout(timeoutId);
+        updateStatusMessage(statusMsg, '✗ PDF read failed');
+        setTimeout(() => statusMsg.remove(), 3000);
+        resolve(false);
+      };
+      reader.readAsDataURL(pdfBlob);
+    });
+  } catch (err) {
+    console.error('Statement PDF generation failed:', err);
+    updateStatusMessage(statusMsg, `✗ PDF generation failed: ${err.message}`);
+    setTimeout(() => statusMsg.remove(), 3000);
+    return false;
+  }
+}
+
+// Statement WhatsApp send — same one-PDF-for-everything idea. The backend
+// function just relays whatever message/PDF it's given, so no server-side
+// changes are needed here (unlike email's itemized body).
+async function sendStatementWhatsApp(client, docs) {
+  if (!client.phone || !docs.length) { alert('Client phone or documents missing'); return false; }
+  const statusMsg = createStatusMessage('📱 Generating statement PDF...');
+  try {
+    const filename = `statement-${new Date().toISOString().slice(0, 10)}.pdf`;
+    const pdfBlob = await generateStatementPDFBlob(client, docs, filename);
+    updateStatusMessage(statusMsg, '📱 Preparing message...');
+    const reader = new FileReader();
+    return await new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        openWhatsAppStatementFallback(client, docs);
+        updateStatusMessage(statusMsg, '✓ Opening WhatsApp Web...');
+        setTimeout(() => statusMsg.remove(), 2000);
+        resolve(false);
+      }, 8000);
+      reader.onload = async () => {
+        clearTimeout(timeoutId);
+        try {
+          const base64PDF = reader.result.split(',')[1];
+          const totalAmt = docs.reduce((a, d) => a + (d.total || 0), 0);
+          const message = `📋 *${(SETTINGS.bizName || 'STATEMENT').toUpperCase()}*\n\n` +
+            `*Client:* ${client.name}\n*Documents:* ${docs.length}\n*Total:* ${fmt(totalAmt)}\n\n` +
+            docs.map(d => `• ${d.id} (${invStatus(d)}) — ${fmt(d.total)}`).join('\n') +
+            `\n\n📎 Statement PDF attached`;
+          updateStatusMessage(statusMsg, '📤 Sending via WhatsApp...');
+          const response = await fetch('/.netlify/functions/send-whatsapp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: client.phone.replace(/\D/g, ''), message, pdfBase64: base64PDF, fileName: filename })
+          });
+          if (response.ok) {
+            updateStatusMessage(statusMsg, `✓ WhatsApp sent to ${client.phone}!`);
+            setTimeout(() => statusMsg.remove(), 3000);
+            resolve(true);
+          } else {
+            openWhatsAppStatementFallback(client, docs);
+            updateStatusMessage(statusMsg, '✓ Opening WhatsApp Web...');
+            setTimeout(() => statusMsg.remove(), 2000);
+            resolve(false);
+          }
+        } catch (err) {
+          console.error('Statement WhatsApp send error:', err);
+          openWhatsAppStatementFallback(client, docs);
+          updateStatusMessage(statusMsg, '✓ Opening WhatsApp Web...');
+          setTimeout(() => statusMsg.remove(), 2000);
+          resolve(false);
+        }
+      };
+      reader.onerror = () => {
+        clearTimeout(timeoutId);
+        openWhatsAppStatementFallback(client, docs);
+        updateStatusMessage(statusMsg, '✓ Opening WhatsApp Web...');
+        setTimeout(() => statusMsg.remove(), 2000);
+        resolve(false);
+      };
+      reader.readAsDataURL(pdfBlob);
+    });
+  } catch (err) {
+    console.error('Statement PDF generation failed:', err);
+    openWhatsAppStatementFallback(client, docs);
+    updateStatusMessage(statusMsg, '✓ Opening WhatsApp Web (PDF failed)...');
+    setTimeout(() => statusMsg.remove(), 2000);
+    return false;
+  }
+}
+
+function openWhatsAppStatementFallback(client, docs) {
+  const totalAmt = docs.reduce((a, d) => a + (d.total || 0), 0);
+  const message = `Hi ${client.name}, here is a summary of your ${docs.length} document(s) from ${SETTINGS.bizName || 'us'}:\n\n` +
+    docs.map(d => `• ${d.id} (${invStatus(d)}) — ${fmt(d.total)}`).join('\n') +
+    `\n\nTotal: ${fmt(totalAmt)}\n\n(Please attach the downloaded statement PDF to this chat.)`;
+  const countryCode = (client.phone || '').replace(/\D/g, '');
+  const url = `https://wa.me/${countryCode}?text=${encodeURIComponent(message)}`;
+  window.open(url, '_blank');
+}
+
+// Printable combined statement — invoices/cash sales and quotations together
+// with running totals, the "one final document" view of a client's history.
+function printClientStatement(id) {
+  const c = clients.find(x => x.id === id);
+  if (!c) return;
+  const docs    = _clientDocs(id);
+  const invDocs = docs.filter(d => d.type !== 'quotation');
+  const qtDocs  = docs.filter(d => d.type === 'quotation');
+  const invTotal = invDocs.reduce((a, d) => a + d.total, 0);
+  const invBal   = invDocs.reduce((a, d) => a + invBalance(d), 0);
+  const qtTotal  = qtDocs.reduce((a, d) => a + d.total, 0);
+
+  const win = window.open('', '_blank', 'width=900,height=700');
+  if (!win) { alert('Allow popups to print the statement.'); return; }
+
+  function rows(list, isQt) {
+    if (!list.length) return `<tr><td colspan="5" style="text-align:center;color:#999">None</td></tr>`;
+    return list.map(d => `<tr>
+      <td>${d.id}</td><td>${d.date || '—'}</td><td>${invStatus(d)}</td>
+      <td style="text-align:right">${fmt(d.total)}</td>
+      <td style="text-align:right">${isQt ? '—' : fmt(invBalance(d))}</td>
+    </tr>`).join('');
+  }
+
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Statement — ${c.name}</title><style>
+    body{font-family:Arial,sans-serif;font-size:12px;margin:24px;color:#1a1a1a}
+    h2{font-size:16px;margin-bottom:2px} h3{font-size:12px;margin:18px 0 6px;text-transform:uppercase;color:#555}
+    p{color:#666;font-size:11px;margin:2px 0}
+    table{border-collapse:collapse;width:100%;margin-bottom:6px} th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;font-size:11px}
+    th{background:#f5f5f3;font-weight:700;text-transform:uppercase;font-size:10px}
+    tr:nth-child(even){background:#fafaf8}
+    .totals{display:flex;gap:24px;margin-top:6px;font-size:12px}
+    .totals strong{font-size:13px}
+    @media print{button{display:none}}
+  </style></head><body>
+    <h2>Client Statement — ${c.name}</h2>
+    <p>${c.phone || ''}${c.email ? ' · ' + c.email : ''}</p>
+    <p>Generated ${new Date().toLocaleDateString('en-KE', { day:'2-digit', month:'short', year:'numeric' })}</p>
+
+    <h3>Invoices &amp; Cash Sales</h3>
+    <table><thead><tr><th>Doc #</th><th>Date</th><th>Status</th><th style="text-align:right">Total</th><th style="text-align:right">Balance</th></tr></thead>
+    <tbody>${rows(invDocs, false)}</tbody></table>
+    <div class="totals"><span>Total Billed: <strong>${fmt(invTotal)}</strong></span><span>Balance Due: <strong style="color:${invBal > 0 ? '#dc2626' : '#16a34a'}">${fmt(invBal)}</strong></span></div>
+
+    <h3>Quotations</h3>
+    <table><thead><tr><th>Doc #</th><th>Date</th><th>Status</th><th style="text-align:right">Total</th><th></th></tr></thead>
+    <tbody>${rows(qtDocs, true)}</tbody></table>
+    <div class="totals"><span>Total Quoted: <strong>${fmt(qtTotal)}</strong></span></div>
+
     <br><button onclick="window.print()" style="padding:6px 16px;background:#C8252A;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px">Print / Save as PDF</button>
   </body></html>`);
   win.document.close();
@@ -5565,6 +6194,34 @@ function renderAnalytics() {
     deptClientRev[item.dept][inv.clientName] = (deptClientRev[item.dept][inv.clientName] || 0) + item.price * item.qty;
   }));
 
+  // Service performance — aggregated by service, regardless of which department
+  // it was billed under (package sub-items collapse back into their parent service).
+  const svcPerfAgg = {};
+  filtered.forEach(inv => inv.items.forEach(item => {
+    const baseName = item.name.includes(' · ') ? item.name.split(' · ')[0] : item.name;
+    if (!svcPerfAgg[baseName]) svcPerfAgg[baseName] = { name: baseName, depts: new Set(), qty: 0, revenue: 0, invoiceIds: new Set() };
+    const s = svcPerfAgg[baseName];
+    s.depts.add(item.dept);
+    s.qty += item.qty || 0;
+    s.revenue += (item.price || 0) * (item.qty || 0);
+    s.invoiceIds.add(inv.id);
+  }));
+  const svcPerfTotalRevenue = Object.values(svcPerfAgg).reduce((a, s) => a + s.revenue, 0);
+  let svcPerfList = Object.values(svcPerfAgg).map(s => ({
+    name: s.name,
+    deptList: [...s.depts],
+    qty: s.qty,
+    revenue: s.revenue,
+    invoiceCount: s.invoiceIds.size,
+    avgPrice: s.qty ? s.revenue / s.qty : 0,
+  }));
+  if (svcPerfDeptFilter !== 'all') svcPerfList = svcPerfList.filter(s => s.deptList.includes(svcPerfDeptFilter));
+  if (svcPerfSearch) svcPerfList = svcPerfList.filter(s => s.name.toLowerCase().includes(svcPerfSearch.toLowerCase()));
+  svcPerfList.sort((a, b) => svcPerfSort === 'qty' ? b.qty - a.qty : svcPerfSort === 'name' ? a.name.localeCompare(b.name) : b.revenue - a.revenue);
+  // Stash for the drill-down modal (keyed by the raw, unfiltered aggregation)
+  _svcPerfAgg = svcPerfAgg;
+  _svcPerfInvoices = filtered;
+
   // Payment methods — distribute split payments into individual method buckets
   const pmTotals = {};
   filtered.forEach(inv => {
@@ -5878,6 +6535,56 @@ function renderAnalytics() {
       </div>
     </div>
 
+    <!-- Service Performance — cross-department, drill into any service -->
+    <div id="rpt-svc-perf" class="card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div class="card-title" style="margin:0"><i class="ti ti-list-details" style="color:var(--purple)"></i> Service Performance <span style="font-size:10px;font-weight:400;color:var(--muted)">(all departments · click a row to drill in)</span></div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+          <div class="search-bar" style="width:180px;margin:0"><i class="ti ti-search"></i><input placeholder="Search services…" value="${svcPerfSearch}" oninput="svcPerfSearch=this.value;renderAnalytics()"/></div>
+          <select onchange="svcPerfDeptFilter=this.value;renderAnalytics()" style="padding:6px 8px;border-radius:7px;border:1px solid var(--border);font-size:11px">
+            <option value="all" ${svcPerfDeptFilter==='all'?'selected':''}>All Departments</option>
+            ${DEPTS.map(d => `<option value="${d.id}" ${svcPerfDeptFilter===d.id?'selected':''}>${d.name}</option>`).join('')}
+          </select>
+          <select onchange="svcPerfSort=this.value;renderAnalytics()" style="padding:6px 8px;border-radius:7px;border:1px solid var(--border);font-size:11px">
+            <option value="revenue" ${svcPerfSort==='revenue'?'selected':''}>Sort: Revenue</option>
+            <option value="qty" ${svcPerfSort==='qty'?'selected':''}>Sort: Qty Sold</option>
+            <option value="name" ${svcPerfSort==='name'?'selected':''}>Sort: Name</option>
+          </select>
+        </div>
+      </div>
+      ${!svcPerfList.length
+        ? '<div style="color:var(--muted);font-size:12px;text-align:center;padding:20px">No service sales in this period</div>'
+        : `<div style="overflow-x:auto"><table class="table" style="width:100%">
+            <thead><tr>
+              <th>Service</th>
+              <th>Department</th>
+              <th style="text-align:right">Qty Sold</th>
+              <th style="text-align:right">Invoices</th>
+              <th style="text-align:right">Avg Price</th>
+              <th style="text-align:right">Revenue</th>
+              <th style="text-align:right">Share</th>
+            </tr></thead>
+            <tbody>
+              ${svcPerfList.map(s => {
+                const share = svcPerfTotalRevenue ? Math.round(s.revenue / svcPerfTotalRevenue * 100) : 0;
+                const deptBadges = s.deptList.map(id => {
+                  const d = DEPTS.find(x => x.id === id);
+                  return `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:6px"><span style="width:7px;height:7px;border-radius:50%;background:${d?.color||'#888'};display:inline-block"></span><span style="font-size:11px;color:var(--muted)">${d?.name||id||'—'}</span></span>`;
+                }).join('');
+                return `<tr style="cursor:pointer" onclick="openServiceDrilldown('${s.name.replace(/'/g,"\\'")}')">
+                  <td style="font-weight:600">${s.name}</td>
+                  <td>${deptBadges || '—'}</td>
+                  <td style="text-align:right">${s.qty}</td>
+                  <td style="text-align:right">${s.invoiceCount}</td>
+                  <td style="text-align:right">${fmt(s.avgPrice)}</td>
+                  <td style="text-align:right;font-weight:700;color:var(--red)">${fmt(s.revenue)}</td>
+                  <td style="text-align:right"><span style="font-size:11px;padding:2px 8px;border-radius:12px;background:#f3e8ff;color:#6b21a8">${share}%</span></td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table></div>`}
+    </div>
+
     <!-- Top Clients per Department -->
     <div id="rpt-top-clients" class="card" style="margin-bottom:14px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px">
@@ -6036,6 +6743,73 @@ function renderAnalytics() {
 }
 
 function setTopClientDept(d) { activeTopClientDept = d; renderAnalytics(); }
+
+// Drill into a single service's performance across all departments/invoices
+// for the currently active analytics period (uses the data stashed by the
+// last renderAnalytics() call, so it always matches what's on screen).
+function openServiceDrilldown(name) {
+  const agg = _svcPerfAgg[name];
+  if (!agg) return;
+  const svcMeta = SERVICES.find(s => s.name === name);
+  const totalPeriodRevenue = Object.values(_svcPerfAgg).reduce((a, s) => a + s.revenue, 0);
+  const share = totalPeriodRevenue ? Math.round(agg.revenue / totalPeriodRevenue * 100) : 0;
+  const qty = agg.qty, revenue = agg.revenue;
+  const avgPrice = qty ? revenue / qty : 0;
+  const margin = svcMeta && svcMeta.cost != null ? svcMeta.price - svcMeta.cost : null;
+  const marginPct = margin != null && svcMeta.price ? Math.round(margin / svcMeta.price * 100) : null;
+
+  // Rows: one per invoice that contains this service, with the invoice's
+  // qty/revenue for that service specifically (an invoice can list it more
+  // than once as sub-items, so sum those together).
+  const rows = _svcPerfInvoices
+    .map(inv => {
+      const matched = inv.items.filter(it => (it.name.includes(' · ') ? it.name.split(' · ')[0] : it.name) === name);
+      if (!matched.length) return null;
+      const lineQty = matched.reduce((a, it) => a + (it.qty || 0), 0);
+      const lineRev = matched.reduce((a, it) => a + (it.price || 0) * (it.qty || 0), 0);
+      const dept = DEPTS.find(d => d.id === matched[0].dept);
+      return { inv, lineQty, lineRev, dept };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (b.inv.date || '').localeCompare(a.inv.date || ''));
+
+  document.getElementById('svc-drilldown-title').textContent = name;
+  document.getElementById('svc-drilldown-body').innerHTML = `
+    <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px">
+      <div class="stat-card" style="border-top-color:var(--red)"><div class="stat-label">Revenue</div><div class="stat-value">${fmt(revenue)}</div><div class="stat-sub">${share}% of period</div></div>
+      <div class="stat-card" style="border-top-color:var(--blue)"><div class="stat-label">Qty Sold</div><div class="stat-value">${qty}</div></div>
+      <div class="stat-card" style="border-top-color:var(--green)"><div class="stat-label">Invoices</div><div class="stat-value">${rows.length}</div></div>
+      <div class="stat-card" style="border-top-color:#f59e0b"><div class="stat-label">Avg Price</div><div class="stat-value">${fmt(avgPrice)}</div></div>
+      ${marginPct != null ? `<div class="stat-card" style="border-top-color:#8b5cf6"><div class="stat-label">Margin</div><div class="stat-value">${fmt(margin)}</div><div class="stat-sub">${marginPct}%</div></div>` : ''}
+    </div>
+    ${svcMeta ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:10px 12px;background:#f8f8f6;border-radius:8px;border:1px solid var(--border)">
+      <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:9px;height:9px;border-radius:50%;background:${DEPTS.find(d=>d.id===svcMeta.dept)?.color||'#888'};display:inline-block"></span><strong style="font-size:12px">${DEPTS.find(d=>d.id===svcMeta.dept)?.name || svcMeta.dept}</strong></span>
+      ${svcMeta.desc ? `<span style="color:var(--muted);font-size:11px">${svcMeta.desc}</span>` : ''}
+      <span style="margin-left:auto;font-size:11px;color:var(--muted)">List price: <strong style="color:var(--text)">${fmt(svcMeta.price)}</strong></span>
+    </div>` : ''}
+    <div class="card-title" style="margin-bottom:8px"><i class="ti ti-file-invoice" style="color:var(--blue)"></i> Invoices in this period</div>
+    ${!rows.length
+      ? '<div style="color:var(--muted);font-size:12px;text-align:center;padding:16px">No matching invoices</div>'
+      : `<div style="overflow-x:auto"><table class="table" style="width:100%">
+          <thead><tr>
+            <th>Invoice #</th><th>Client</th><th>Date</th><th>Department</th>
+            <th style="text-align:right">Qty</th><th style="text-align:right">Revenue</th><th style="text-align:right">Status</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map(r => `<tr>
+              <td><a href="#" onclick="closeModal('svc-drilldown-modal');openInvoice('${r.inv.id}');return false" style="color:var(--blue);font-weight:600">${r.inv.id}</a></td>
+              <td>${r.inv.clientName || '—'}</td>
+              <td style="color:var(--muted);font-size:11px">${r.inv.date || '—'}</td>
+              <td>${r.dept ? `<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:50%;background:${r.dept.color};display:inline-block"></span>${r.dept.name}</span>` : '—'}</td>
+              <td style="text-align:right">${r.lineQty}</td>
+              <td style="text-align:right;font-weight:600">${fmt(r.lineRev)}</td>
+              <td style="text-align:right"><span class="badge ${invStatus(r.inv)==='Paid'?'badge-green':invStatus(r.inv)==='Unpaid'?'badge-red':'badge-amber'}">${invStatus(r.inv)}</span></td>
+            </tr>`).join('')}
+          </tbody>
+        </table></div>`}
+  `;
+  openModal('svc-drilldown-modal');
+}
 
 // Set the global analytics period to a named preset (today / this week / month / etc.)
 function setAnalyticsPeriod(preset) {
