@@ -3,14 +3,30 @@
 
 const nodemailer = require('nodemailer');
 
-// Configure your email service here
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
+// Sender identity — see the note in send-billing-reminder.js. EMAIL_FROM is the
+// visible sender; EMAIL_USER is the account that authenticates to the mail
+// server, and the two differ unless the SMTP account is the address itself.
+const EMAIL_FROM = process.env.EMAIL_FROM || 'EDOS Centre <info@edoscentre.co.ke>';
+
+const transporter = nodemailer.createTransport(
+  process.env.SMTP_HOST
+    ? {
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT || 465),
+        secure: String(process.env.SMTP_SECURE || 'true') !== 'false',
+        auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+      }
+    : {
+        service: 'gmail',
+        auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+      }
+);
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
 
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
@@ -18,31 +34,42 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { email, clientName, invoice, documents, pdfBase64, fileName, totalPaid, balance, statusLabel } = JSON.parse(event.body);
+    const { email, clientName, invoice, documents, pdfBase64, fileName,
+            totalPaid, balance, statusLabel, shop } = JSON.parse(event.body);
+
+    // Every detail below belongs to the shop that raised the document and is
+    // sent through in the request from its own Settings. Nothing here falls
+    // back to another business: an invoice that quotes the wrong M-Pesa till
+    // sends a customer's money to the wrong company, so a missing value is
+    // omitted from the email rather than substituted.
+    const s = shop || {};
+    const bizName = s.name || 'your supplier';
+    const phones = (Array.isArray(s.phones) ? s.phones : []).filter(Boolean);
+
+    const payLines = [
+      s.mpesaTill    ? `📱 <strong>M-Pesa Till Number:</strong> ${esc(s.mpesaTill)}` : '',
+      s.mpesaPaybill ? `📱 <strong>M-Pesa Paybill:</strong> ${esc(s.mpesaPaybill)}${s.mpesaAccount ? ` &nbsp;·&nbsp; Account: ${esc(s.mpesaAccount)}` : ''}` : '',
+      s.bankName     ? `🏦 <strong>Bank Transfer — ${esc(s.bankName)}</strong>${s.bankBranch ? `, ${esc(s.bankBranch)}` : ''}` : '',
+      s.bankAccount  ? `Account: ${esc(s.bankAccount)}` : '',
+      s.bankHolder   ? `Account Name: ${esc(s.bankHolder)}` : '',
+    ].filter(Boolean);
+
+    const contactLines = [
+      phones.length ? `📞 Phone: ${phones.map(esc).join(' / ')}` : '',
+      s.email       ? `📧 Email: ${esc(s.email)}` : '',
+      s.website     ? `🌐 ${esc(s.website)}` : '',
+      s.kraPin      ? `Tax ID: ${esc(s.kraPin)}` : '',
+    ].filter(Boolean);
 
     const contactBlock = `
-        <h3>Payment Methods</h3>
-        <p>
-          📱 <strong>M-Pesa Till Number:</strong> 9013189<br/>
-          🏦 <strong>Bank Transfer - KCB Bank</strong><br/>
-          Account: 1310465029<br/>
-          Account Name: Mejason Media Production<br/>
-          💳 <strong>Credit/Cheque</strong> (as agreed)
-        </p>
-
-        <h3>Contact Information</h3>
-        <p>
-          📞 Phone: 0700864849 / 0768375441<br/>
-          📧 Email: mejasanw@gmail.com<br/>
-          Tax ID: 0771400615
-        </p>
-
-        <p>Thank you for choosing Mejason Media Production!</p>
+        ${payLines.length ? `<h3>Payment Methods</h3><p>${payLines.join('<br/>')}</p>` : ''}
+        ${contactLines.length ? `<h3>Contact Information</h3><p>${contactLines.join('<br/>')}</p>` : ''}
+        <p>Thank you for choosing ${esc(bizName)}!</p>
         <p>
           Best regards,<br/>
-          Mejason Media Production Team<br/>
-          Kisumu, Kenya
-        </p>`;
+          ${esc(bizName)}${s.location ? `<br/>${esc(s.location)}` : ''}
+        </p>
+        ${s.footnote ? `<p style="color:#777;font-size:12px">${esc(s.footnote)}</p>` : ''}`;
 
     // A "documents" array means this is a combined multi-document send from
     // the Client Detail statement view — one PDF covering all of them, with
@@ -50,11 +77,11 @@ exports.handler = async (event) => {
     const isMulti = Array.isArray(documents) && documents.length > 0;
 
     const subject = isMulti
-      ? `${documents.length} document(s) from Mejason Media`
-      : `Invoice ${invoice.id} from Mejason Media - ${statusLabel}`;
+      ? `${documents.length} document(s) from ${bizName}`
+      : `Invoice ${invoice.id} from ${bizName} - ${statusLabel}`;
 
     const html = isMulti ? `
-        <h2>Dear ${clientName},</h2>
+        <h2>Dear ${esc(clientName)},</h2>
         <p>Please find your ${documents.length} document(s) attached as a single PDF:</p>
 
         <h3>Documents</h3>
@@ -79,7 +106,7 @@ exports.handler = async (event) => {
         <p>Full itemized detail for each document is in the attached PDF.</p>
         ${contactBlock}
       ` : `
-        <h2>Dear ${clientName},</h2>
+        <h2>Dear ${esc(clientName)},</h2>
         <p>Please find your invoice details below:</p>
 
         <h3>Invoice Information</h3>
@@ -112,7 +139,8 @@ exports.handler = async (event) => {
       `;
 
     const mailOptions = {
-      from: process.env.EMAIL_USER,
+      from: EMAIL_FROM,
+      replyTo: EMAIL_FROM,
       to: email,
       subject,
       html,

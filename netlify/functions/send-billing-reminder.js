@@ -1,17 +1,40 @@
 // Netlify Function to send EdosPoa tenant billing reminder/suspension emails.
-// Called by the Supabase billing-daily-check edge function and by
-// mpesa-stk-callback (payment confirmation). Reuses the same Gmail
-// transporter/env vars as send-invoice-email.js.
+// Called by the Supabase billing-daily-check edge function, which needs
+// NETLIFY_SITE_URL set as a Supabase secret to reach this URL. Reuses the same
+// Gmail transporter/env vars (EMAIL_USER / EMAIL_PASS) as send-invoice-email.js.
+//
+// The 'payment received' branch of buildEmail() has no caller yet:
+// mpesa-stk-callback settles the payment but does not send a confirmation.
 
 const nodemailer = require('nodemailer');
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
+// Sender identity. EMAIL_FROM is what the recipient sees and is deliberately
+// separate from EMAIL_USER, the account that authenticates to the mail server —
+// they are only the same address when the SMTP account IS info@edoscentre.co.ke.
+//
+// Sending as info@edoscentre.co.ke through a plain Gmail account will be marked
+// as spam or rejected outright, because edoscentre.co.ke's SPF record does not
+// authorise Gmail to send for it. Use one of:
+//   * the domain's own mail server (cPanel): set SMTP_HOST=mail.edoscentre.co.ke
+//   * Google Workspace on edoscentre.co.ke: leave SMTP_HOST unset, and set
+//     EMAIL_USER=info@edoscentre.co.ke with an app password
+//   * a Gmail account with info@edoscentre.co.ke added and verified under
+//     Settings → Accounts → "Send mail as"
+const EMAIL_FROM = process.env.EMAIL_FROM || 'EDOS Centre <info@edoscentre.co.ke>';
+
+const transporter = nodemailer.createTransport(
+  process.env.SMTP_HOST
+    ? {
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT || 465),
+        secure: String(process.env.SMTP_SECURE || 'true') !== 'false',
+        auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+      }
+    : {
+        service: 'gmail',
+        auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+      }
+);
 
 function fmtDate(iso) {
   if (!iso) return '';
@@ -113,7 +136,8 @@ exports.handler = async (event) => {
     );
 
     await transporter.sendMail({
-      from: process.env.EMAIL_USER,
+      from: EMAIL_FROM,
+      replyTo: EMAIL_FROM,
       to: email,
       subject,
       html
