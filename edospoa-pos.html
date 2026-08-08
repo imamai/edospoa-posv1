@@ -385,6 +385,32 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
   </div>
 </div>
 
+<!-- BILLING / M-PESA PAYMENT OVERLAY — shown when a tenant's account is
+     suspended for non-payment, either at login or mid-session. -->
+<div id="billing-overlay" style="display:none;position:fixed;inset:0;background:rgba(20,20,20,.82);z-index:99999;align-items:center;justify-content:center;padding:16px">
+  <div style="background:#fff;border-radius:14px;max-width:400px;width:100%;padding:28px 24px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.35)">
+    <div style="font-size:38px;margin-bottom:6px" id="bo-icon">🔒</div>
+    <div style="font-size:17px;font-weight:800;margin-bottom:6px" id="bo-title">Account Suspended</div>
+    <div style="font-size:13px;color:#666;line-height:1.5;margin-bottom:16px" id="bo-message"></div>
+    <div style="background:#f7f5f0;border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:13px" id="bo-details"></div>
+
+    <div id="bo-pay-form">
+      <input id="bo-phone" type="tel" placeholder="M-Pesa phone e.g. 0712345678"
+        style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;margin-bottom:10px"/>
+      <button id="bo-pay-btn" onclick="startBillingPay()"
+        style="width:100%;padding:12px;border:none;border-radius:8px;background:#00A550;color:#fff;font-weight:700;font-size:14px;cursor:pointer">
+        Pay with M-Pesa
+      </button>
+      <div id="bo-status" style="font-size:12.5px;margin-top:10px;min-height:16px;color:#666"></div>
+    </div>
+
+    <div style="margin-top:16px;display:flex;justify-content:center;gap:14px">
+      <a href="#" onclick="closeBillingOverlay();return false" id="bo-close-link" style="font-size:12.5px;color:#888">Back to login</a>
+      <a href="#" onclick="logout();closeBillingOverlay();return false" id="bo-logout-link" style="font-size:12.5px;color:#888;display:none">Log out</a>
+    </div>
+  </div>
+</div>
+
 <!-- APP -->
 <div id="app" style="position:relative">
   <div class="topbar">
@@ -416,6 +442,7 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
       <div class="page" id="page-settings"></div>
       <div class="page" id="page-services"></div>
       <div class="page" id="page-modules"></div>
+      <div class="page" id="page-platform"></div>
     </div>
   </div>
 
@@ -786,6 +813,17 @@ const saleDate = () => posDate ? dateStr(posDate) : dateStr();
 const saleTime = () => posDate ? timeStr(posDate) : timeStr();
 const uid = () => Math.random().toString(36).slice(2, 8).toUpperCase();
 
+// ── PLAN PRICING ───────────────────────────────────────────
+// What this shop pays EdosPoa per 30-day period, keyed on clients.event.
+// Modules control what the shop can use; the plan is what it is billed.
+// Keep in step with PLAN_PRICES in edospoa-admin.html and
+// supabase/functions/_shared/billing.ts.
+const PLAN_PRICES = { basic: 1000, standard: 1500, premium: 2500, trial: 0 };
+const planPriceFor = plan => {
+  const p = PLAN_PRICES[String(plan || '').toLowerCase().trim()];
+  return p === undefined ? PLAN_PRICES.basic : p;
+};
+
 // Derive an ID prefix from a name — first letter of each word, uppercase,
 // alphanumeric only, max 4 letters. "Mejason Media Production" → "MMP",
 // "EDOS CENTRE" → "EC", "Acme & Co." → "AC".
@@ -940,6 +978,12 @@ function showDbBadge(connected) {
 // ── DB HELPERS ─────────────────────────────────────────
 async function dbInsertClient(c) {
   if (!useSupabase) return;
+  // `clients` also holds this shop's own platform account row (id ===
+  // currentShopId, shop_id NULL). Upserting a customer over that id would
+  // stamp shop_id onto the account row, which then shows up in this shop's own
+  // customer list and can be deleted from here — taking the whole account with
+  // it. Never let a customer write touch the account row.
+  if (c.id === currentShopId) { console.warn('Refusing to save a customer over the shop account row', c.id); return; }
   await sb.from('clients').upsert({ id: c.id, shop_id: currentShopId, name: c.name, phone: c.phone, email: c.email, event: c.event, birthday: c.birthday || null, notes: c.notes, referral_code: c.referral_code || null, referred_by: c.referred_by || null, created_at: c.createdAt });
 }
 async function dbInsertInvoice(inv) {
@@ -968,9 +1012,10 @@ async function dbDeleteExpense(id) {
 }
 
 async function deleteClient(id) {
+  if (id === currentShopId) { alert('That record is this shop\'s own account and cannot be deleted here.'); return; }
   if (!confirm('Delete this client? This cannot be undone.')) return;
   clients = clients.filter(c => c.id !== id);
-  if (useSupabase) await sb.from('clients').delete().eq('id', id).eq('shop_id', currentShopId);
+  if (useSupabase) await sb.from('clients').delete().eq('id', id).eq('shop_id', currentShopId).neq('id', currentShopId);
   renderClients();
 }
 
@@ -1258,7 +1303,9 @@ async function loadFromSupabase() {
     let from = 0;
     const PAGE = 1000;
     while (true) {
-      const { data: cls, error } = await sb.from('clients').select('*').eq('shop_id', currentShopId).range(from, from + PAGE - 1);
+      // .neq excludes this shop's own platform account row, which historically
+      // carried shop_id = its own id and so appeared as a customer of itself.
+      const { data: cls, error } = await sb.from('clients').select('*').eq('shop_id', currentShopId).neq('id', currentShopId).range(from, from + PAGE - 1);
       if (error || !cls || !cls.length) break;
       allClients.push(...cls);
       if (cls.length < PAGE) break;
@@ -1281,6 +1328,7 @@ async function loadFromSupabase() {
 let currentShopId   = '';
 let currentShopName = '';
 let currentShopData = null;
+let currentShopIsPlatform = false; // true only for EdosPoa's own shop account
 let assignedModules = [];
 let currentUser     = null;
 
@@ -1467,11 +1515,17 @@ async function epLogin() {
   currentShopId   = shopId;
   currentShopName = shopId;
   try {
-    const { data: shop } = await sb.from('clients').select('name,status').eq('id', shopId).maybeSingle();
+    const { data: shop } = await sb.from('clients').select('name,status,auto_suspended,is_platform_account').eq('id', shopId).maybeSingle();
     if (shop) {
+      currentShopIsPlatform = shop.is_platform_account === true;
       if (shop.status === 'suspended') {
         btn.disabled = false; btn.textContent = 'Sign In →';
-        errEl.textContent = 'This account is suspended. Contact EdosPoa support.';
+        if (shop.auto_suspended) {
+          // Payment-lapse suspension — let them pay right from the login screen.
+          openBillingOverlay({ clientId: shopId, clientName: shop.name, mode: 'login' });
+        } else {
+          errEl.textContent = 'This account is suspended. Contact EdosPoa support.';
+        }
         return;
       }
       currentShopName = shop.name;
@@ -1522,6 +1576,9 @@ async function epLogin() {
   if (isAdminRole) {
     // Admin/Owner: pages from assigned modules PLUS their always-on management pages
     perms = [...new Set([...modulePerms, ...OWNER_ALWAYS])];
+    // The platform's own shop gets one extra page: EdosPoa tenant administration.
+    // Nobody else can see it, because no other shop is the platform account.
+    if (currentShopIsPlatform) perms.push('platform');
   } else if (role === 'cashier') {
     // Cashier: POS + Invoices + Clients from modules
     const CASHIER_ALLOWED = ['pos', 'invoices', 'clients'];
@@ -1563,6 +1620,7 @@ async function epLogin() {
   buildSidebar();
   await loadFromSupabase();
   navToFirstAllowed();
+  startBillingWatcher();
 
   setInterval(() => {
     const el = document.getElementById('tb-date');
@@ -1587,13 +1645,152 @@ async function doLogin() { epLogin(); }
 function logout() {
   currentUser = null; cart = [];
   invoices = []; clients = []; payments = []; expenses = [];
-  currentShopId = ''; currentShopName = ''; assignedModules = [];
+  currentShopId = ''; currentShopName = ''; assignedModules = []; currentShopIsPlatform = false;
+  const pf = document.getElementById('page-platform');
+  if (pf) { pf.innerHTML = ''; delete pf.dataset.loaded; }  // drop the embedded admin on logout
+  if (billingWatcherTimer) { clearInterval(billingWatcherTimer); billingWatcherTimer = null; }
   if (useSupabase) sb = window.supabase.createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
   document.getElementById('app').classList.remove('show');
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('ep-username').value = '';
   document.getElementById('ep-password').value = '';
   document.getElementById('ep-err').textContent = '';
+}
+
+// ── M-PESA BILLING OVERLAY ───────────────────────────────────
+// Shown when a tenant's account is suspended for non-payment — either
+// blocking login, or blocking an already-open session once the periodic
+// watcher (startBillingWatcher) notices the account has lapsed mid-use.
+let billingOverlayCtx  = null;
+let billingPollTimer   = null;
+let billingWatcherTimer = null;
+
+function mpesaFunctionsUrl() {
+  return SUPABASE_CONFIG.url.replace('.supabase.co', '.functions.supabase.co');
+}
+
+function startBillingWatcher() {
+  if (billingWatcherTimer) clearInterval(billingWatcherTimer);
+  billingWatcherTimer = setInterval(checkBillingStatus, 5 * 60 * 1000); // every 5 min
+}
+
+async function checkBillingStatus() {
+  if (!useSupabase || !currentShopId) return;
+  try {
+    const { data: shop } = await sb.from('clients').select('status,auto_suspended').eq('id', currentShopId).maybeSingle();
+    if (shop && shop.status === 'suspended' && shop.auto_suspended) {
+      openBillingOverlay({ clientId: currentShopId, clientName: currentShopName, mode: 'session' });
+    }
+  } catch (e) { /* non-fatal — try again next interval */ }
+}
+
+async function openBillingOverlay({ clientId, clientName, mode }) {
+  billingOverlayCtx = { clientId, clientName, mode };
+  if (billingPollTimer) { clearInterval(billingPollTimer); billingPollTimer = null; }
+
+  const overlay = document.getElementById('billing-overlay');
+  document.getElementById('bo-title').textContent = 'Account Suspended';
+  document.getElementById('bo-message').textContent =
+    `${clientName || 'Your account'}'s EdosPoa subscription payment is overdue. Pay via M-Pesa below to restore access immediately.`;
+  document.getElementById('bo-details').textContent = 'Loading billing details…';
+  document.getElementById('bo-phone').value = '';
+  document.getElementById('bo-status').textContent = '';
+  document.getElementById('bo-pay-btn').disabled = false;
+  document.getElementById('bo-pay-btn').textContent = 'Pay with M-Pesa';
+  document.getElementById('bo-pay-btn').style.display = 'block';
+  document.getElementById('bo-close-link').style.display = mode === 'login' ? 'inline' : 'none';
+  document.getElementById('bo-logout-link').style.display = mode === 'session' ? 'inline' : 'none';
+  overlay.style.display = 'flex';
+
+  try {
+    const { data: shop } = await sb.from('clients').select('paid_until, event').eq('id', clientId).maybeSingle();
+    const amountDue = planPriceFor(shop?.event);
+    const planName  = String(shop?.event || 'basic').replace(/^./, ch => ch.toUpperCase());
+    const paidUntil = shop?.paid_until ? new Date(shop.paid_until).toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+    document.getElementById('bo-details').innerHTML =
+      `<strong>Plan:</strong> ${planName}<br/><strong>Amount due:</strong> KSh ${amountDue.toLocaleString()}<br/><strong>Was due:</strong> ${paidUntil}`;
+  } catch (e) {
+    document.getElementById('bo-details').textContent = 'Could not load billing details — you can still try paying below.';
+  }
+}
+
+function closeBillingOverlay() {
+  document.getElementById('billing-overlay').style.display = 'none';
+  if (billingPollTimer) { clearInterval(billingPollTimer); billingPollTimer = null; }
+}
+
+async function startBillingPay() {
+  const phone = document.getElementById('bo-phone').value.trim();
+  const statusEl = document.getElementById('bo-status');
+  if (!phone || phone.replace(/\D/g, '').length < 9) {
+    statusEl.style.color = '#c0392b';
+    statusEl.textContent = 'Enter a valid M-Pesa phone number.';
+    return;
+  }
+  const btn = document.getElementById('bo-pay-btn');
+  btn.disabled = true; btn.textContent = 'Sending prompt…';
+  statusEl.style.color = '#666';
+  statusEl.textContent = '';
+
+  try {
+    const res = await fetch(`${mpesaFunctionsUrl()}/mpesa-stk-initiate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_CONFIG.key}`,
+        'apikey': SUPABASE_CONFIG.key
+      },
+      body: JSON.stringify({ client_id: billingOverlayCtx.clientId, phone })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to start M-Pesa payment');
+
+    statusEl.style.color = '#666';
+    statusEl.textContent = data.customer_message || 'Check your phone and enter your M-Pesa PIN…';
+    btn.textContent = 'Waiting for payment…';
+    pollBillingPayment(data.checkout_request_id);
+  } catch (e) {
+    statusEl.style.color = '#c0392b';
+    statusEl.textContent = e.message || 'Could not reach payment service. Try again.';
+    btn.disabled = false; btn.textContent = 'Pay with M-Pesa';
+  }
+}
+
+function pollBillingPayment(checkoutRequestId) {
+  let attempts = 0;
+  const statusEl = document.getElementById('bo-status');
+  billingPollTimer = setInterval(async () => {
+    attempts++;
+    if (attempts > 30) { // ~90 seconds
+      clearInterval(billingPollTimer); billingPollTimer = null;
+      statusEl.style.color = '#c0392b';
+      statusEl.textContent = 'Still waiting on M-Pesa. If you completed payment, this page will update shortly — otherwise try again.';
+      document.getElementById('bo-pay-btn').disabled = false;
+      document.getElementById('bo-pay-btn').textContent = 'Pay with M-Pesa';
+      return;
+    }
+    try {
+      const { data } = await sb.from('mpesa_payments').select('status').eq('checkout_request_id', checkoutRequestId).maybeSingle();
+      if (!data || data.status === 'pending') return;
+
+      clearInterval(billingPollTimer); billingPollTimer = null;
+      if (data.status === 'completed') {
+        statusEl.style.color = '#00A550';
+        if (billingOverlayCtx.mode === 'session') {
+          statusEl.textContent = 'Payment received — restoring your account…';
+          setTimeout(() => location.reload(), 1500);
+        } else {
+          statusEl.textContent = 'Payment received! Click "Back to login" and sign in again.';
+          document.getElementById('bo-pay-btn').style.display = 'none';
+        }
+      } else {
+        statusEl.style.color = '#c0392b';
+        statusEl.textContent = 'Payment was not completed. Please try again.';
+        document.getElementById('bo-pay-btn').disabled = false;
+        document.getElementById('bo-pay-btn').textContent = 'Pay with M-Pesa';
+      }
+    } catch (e) { /* keep polling */ }
+  }, 3000);
 }
 
 let DEPTS = [
@@ -1974,6 +2171,79 @@ function revenueInvoices() {
   );
 }
 
+// ── PLATFORM ADMIN ─────────────────────────────────────────
+// The EdosPoa tenant admin, embedded for the platform's own shop account so
+// there is one login rather than two. It is the same edospoa-admin.html file,
+// which keeps its own access gate for anyone opening it directly; the handoff
+// below is what stops it asking for a password a second time in here.
+function renderPlatformAdmin() {
+  const el = document.getElementById('page-platform');
+  if (!el) return;
+  if (!currentShopIsPlatform) {
+    el.innerHTML = `<div class="card" style="padding:32px;text-align:center;color:var(--muted)">
+      <i class="ti ti-lock" style="font-size:36px;display:block;margin-bottom:10px"></i>
+      <div style="font-weight:600;color:var(--text)">Not the platform account</div>
+      <div style="font-size:11px;margin-top:6px">This page is only available to the EdosPoa platform's own shop.</div>
+    </div>`;
+    return;
+  }
+  if (el.dataset.loaded === '1') return; // keep the admin's own state between tab switches
+  el.dataset.loaded = '1';
+  el.innerHTML = `<iframe id="platform-admin-frame" src="edospoa-admin.html"
+    style="width:100%;height:calc(100vh - 130px);border:1px solid var(--border);border-radius:10px;background:#fff"
+    title="EdosPoa Platform Admin"></iframe>`;
+}
+
+// The admin's sections, surfaced as children of Platform Admin in this sidebar.
+const PLATFORM_PAGES = [
+  { key:'dashboard', icon:'ti-chart-pie',    label:'Overview'    },
+  { key:'clients',   icon:'ti-building-store', label:'Tenants'   },
+  { key:'invoices',  icon:'ti-file-invoice', label:'Subscriptions' },
+  { key:'modules',   icon:'ti-puzzle',       label:'Modules'     },
+  { key:'staff',     icon:'ti-users',        label:'Staff Users' },
+  { key:'seed',      icon:'ti-seeding',      label:'Seed Data'   },
+];
+
+let platformPendingSection = null;
+
+function navPlatform(section) {
+  nav('platform', 1);
+  document.querySelectorAll('[id^="nav-platform-"]').forEach(n => n.classList.remove('active'));
+  const item = document.getElementById('nav-platform-' + section);
+  if (item) item.classList.add('active');
+  const label = (PLATFORM_PAGES.find(p => p.key === section) || {}).label || section;
+  document.getElementById('page-title').textContent = 'Platform Admin · ' + label;
+
+  const frame = document.getElementById('platform-admin-frame');
+  if (frame && frame.dataset.ready === '1') {
+    frame.contentWindow.postMessage({ type: 'edospoa-admin-navigate', section }, '*');
+  } else {
+    platformPendingSection = section; // delivered once the admin reports ready
+  }
+}
+
+window.addEventListener('message', (e) => {
+  if (!e.data) return;
+
+  // The embedded admin asks for the current session on load; answer only with
+  // the staff id, which it re-verifies against the database before unlocking.
+  if (e.data.type === 'edospoa-admin-session-request') {
+    if (!currentUser || !currentShopIsPlatform) return;
+    if (!['owner', 'admin'].includes(currentUser.role)) return;
+    e.source?.postMessage({ type: 'edospoa-admin-session', staffId: currentUser.id }, '*');
+    return;
+  }
+
+  // Admin finished booting — send it wherever the sidebar was pointing.
+  if (e.data.type === 'edospoa-admin-ready') {
+    const frame = document.getElementById('platform-admin-frame');
+    if (frame) frame.dataset.ready = '1';
+    const section = platformPendingSection || 'dashboard';
+    platformPendingSection = null;
+    e.source?.postMessage({ type: 'edospoa-admin-navigate', section }, '*');
+  }
+});
+
 function buildSidebar() {
   const perms = currentUser.perms;
   const items = [
@@ -1998,6 +2268,15 @@ function buildSidebar() {
     }
     html += `<div class="nav-item" id="nav-${it.key}" onclick="nav('${it.key}',1)"><i class="ti ${it.icon}"></i>${it.label}</div>`;
   });
+  // The platform admin's own pages hang off this sidebar as children rather
+  // than living behind a second one inside the embed — one navigation for the
+  // whole app. Each entry drives the embedded admin to that section.
+  if (perms.includes('platform')) {
+    html += `<div class="nav-section">Platform Admin</div>`;
+    html += PLATFORM_PAGES.map(p =>
+      `<div class="nav-item" id="nav-platform-${p.key}" onclick="navPlatform('${p.key}')" style="padding-left:26px">
+         <i class="ti ${p.icon}"></i>${p.label}</div>`).join('');
+  }
   document.getElementById('sidebar').innerHTML = html;
 }
 
@@ -2019,7 +2298,8 @@ function nav(page, scroll) {
   const titles = {
     dashboard:'Dashboard', pos:'New Sale', invoices:'Invoices', clients:'Clients',
     inventory:'Inventory', expenses:'Expenses', analytics:'Analytics & Reports', users:'Users & Access',
-    services:'Service Management', settings:'Settings', modules:'My Modules'
+    services:'Service Management', settings:'Settings', modules:'My Modules',
+    platform:'Platform Admin — EdosPoa Tenants'
   };
   document.getElementById('page-title').textContent = titles[page] || page;
   if (page === 'dashboard')  renderDashboard();
@@ -2033,6 +2313,7 @@ function nav(page, scroll) {
   if (page === 'settings')   { renderSettings(); setTimeout(renderDepartmentsList, 10); }
   if (page === 'services')   renderServices();
   if (page === 'modules')    renderMyModules();
+  if (page === 'platform')   renderPlatformAdmin();
   if (scroll) document.querySelector('.main').scrollTop = 0;
 }
 
@@ -5126,8 +5407,9 @@ async function deleteSelectedClients() {
   if (!selectedClientIds.size) return;
   if (!confirm(`Delete ${selectedClientIds.size} client(s)? This cannot be undone.`)) return;
   for (const id of [...selectedClientIds]) {
+    if (id === currentShopId) continue; // never delete this shop's own account row
     clients = clients.filter(c => c.id !== id);
-    if (useSupabase) await sb.from('clients').delete().eq('id', id).eq('shop_id', currentShopId);
+    if (useSupabase) await sb.from('clients').delete().eq('id', id).eq('shop_id', currentShopId).neq('id', currentShopId);
   }
   selectedClientIds.clear();
   renderClients();
@@ -8069,9 +8351,10 @@ async function renderMyModules() {
 
   try {
     // Load ALL available pos_modules (so we can show unassigned ones as locked)
-    const [{ data: allMods }, { data: subs }] = await Promise.all([
+    const [{ data: allMods }, { data: subs }, { data: shopRow }] = await Promise.all([
       sb.from('pos_modules').select('*').eq('is_active', true).order('sort_order'),
-      sb.from('client_subscriptions').select('*, pos_modules(*)').eq('client_id', shopId).eq('status', 'active')
+      sb.from('client_subscriptions').select('*, pos_modules(*)').eq('client_id', shopId).eq('status', 'active'),
+      sb.from('clients').select('event').eq('id', shopId).maybeSingle()
     ]);
 
     const assignedIds = new Set((subs||[]).map(s => s.module_id));
@@ -8080,8 +8363,11 @@ async function renderMyModules() {
     // Sort assigned subs
     assignedSubs.sort((a, b) => (a.pos_modules?.sort_order??99) - (b.pos_modules?.sort_order??99));
 
-    const totalMRR = assignedSubs.reduce((s, sub) =>
-      s + Number(sub.custom_fee || sub.pos_modules?.monthly_fee || 0), 0);
+    // Billed on the plan, not per module — showing a sum of module fees here
+    // would quote this shop a price they are never charged.
+    const shopPlan  = String(shopRow?.event || 'basic');
+    const planLabel = shopPlan.replace(/^./, ch => ch.toUpperCase());
+    const planPrice = planPriceFor(shopPlan);
 
     // Group assigned by tier
     const byTier = {};
@@ -8105,11 +8391,10 @@ async function renderMyModules() {
             ${unassigned.length ? `&nbsp;·&nbsp; ${unassigned.length} locked` : ''}
           </div>
         </div>
-        ${assignedSubs.length ? `
-          <div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px">
-            <i class="ti ti-receipt" style="color:#00A550;font-size:13px"></i>
-            Monthly: <strong style="color:var(--text)">${fmt(totalMRR)}/mo</strong>
-          </div>` : ''}
+        <div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px">
+          <i class="ti ti-receipt" style="color:#00A550;font-size:13px"></i>
+          ${planLabel} plan: <strong style="color:var(--text)">${fmt(planPrice)}</strong> / 30 days
+        </div>
       </div>
 
       ${!assignedSubs.length ? `
@@ -8137,7 +8422,6 @@ async function renderMyModules() {
                 const mod  = sub.pos_modules; if (!mod) return '';
                 const pages = resolveModulePages(mod);
                 const page = pages[0] || null;
-                const fee  = Number(sub.custom_fee || mod.monthly_fee || 0);
                 const accent = TIER_ACCENT[mod.tier]||'#888';
                 const badge  = TIER_BADGE[mod.tier] ||'badge-gray';
                 const hasAccess = page && currentUser?.perms.includes(page);
@@ -8151,7 +8435,7 @@ async function renderMyModules() {
                   <div style="font-size:10px;color:var(--muted);line-height:1.5;flex:1">${mod.description||mod.category||''}</div>
                   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
                     <span style="font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px">
-                      <span class="badge badge-green" style="font-size:9px">● Active</span>&nbsp;${fmt(fee)}/mo
+                      <span class="badge badge-green" style="font-size:9px">● Active</span>&nbsp;Included in ${planLabel}
                       ${pages.length ? `<span style="color:var(--muted)">→ ${pages.join(', ')}</span>` : ''}
                     </span>
                     ${hasAccess ? `<button class="btn btn-sm" style="background:#00A550;color:#fff;font-size:10px;padding:4px 9px" onclick="nav('${page}',1)">
@@ -8181,7 +8465,7 @@ async function renderMyModules() {
                 </div>
                 <div style="font-size:10px;color:var(--muted);line-height:1.4;margin-bottom:6px">${m.description||m.category||''}</div>
                 <div style="font-size:10px;color:var(--muted)">
-                  <i class="ti ti-lock" style="font-size:10px"></i> ${fmt(m.monthly_fee)}/mo · Not assigned
+                  <i class="ti ti-lock" style="font-size:10px"></i> Not included in your plan
                 </div>
               </div>`;
             }).join('')}
