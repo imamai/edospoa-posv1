@@ -10,17 +10,17 @@ const nodemailer = require('nodemailer');
 
 // Sender identity. EMAIL_FROM is what the recipient sees and is deliberately
 // separate from EMAIL_USER, the account that authenticates to the mail server —
-// they are only the same address when the SMTP account IS info@edoscentre.co.ke.
+// they are only the same address when the SMTP account IS billing@edoscentre.co.ke.
 //
-// Sending as info@edoscentre.co.ke through a plain Gmail account will be marked
+// Sending as billing@edoscentre.co.ke through a plain Gmail account will be marked
 // as spam or rejected outright, because edoscentre.co.ke's SPF record does not
 // authorise Gmail to send for it. Use one of:
 //   * the domain's own mail server (cPanel): set SMTP_HOST=mail.edoscentre.co.ke
 //   * Google Workspace on edoscentre.co.ke: leave SMTP_HOST unset, and set
-//     EMAIL_USER=info@edoscentre.co.ke with an app password
-//   * a Gmail account with info@edoscentre.co.ke added and verified under
+//     EMAIL_USER=billing@edoscentre.co.ke with an app password
+//   * a Gmail account with billing@edoscentre.co.ke added and verified under
 //     Settings → Accounts → "Send mail as"
-const EMAIL_FROM = process.env.EMAIL_FROM || 'EDOS Centre <info@edoscentre.co.ke>';
+const EMAIL_FROM = process.env.EMAIL_FROM || 'EDOS Centre <billing@edoscentre.co.ke>';
 
 const transporter = nodemailer.createTransport(
   process.env.SMTP_HOST
