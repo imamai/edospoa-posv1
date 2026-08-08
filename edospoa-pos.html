@@ -1121,7 +1121,8 @@ async function sendInvoiceAutomatedEmail(invId, email, clientName) {
               body: JSON.stringify({
                 email, clientName, invoice: inv,
                 pdfBase64: base64PDF,
-                totalPaid, balance, statusLabel
+                totalPaid, balance, statusLabel,
+                shop: shopEmailDetails()
               })
             });
             
@@ -1895,25 +1896,31 @@ const SETTINGS_DEFAULTS = {
   // blank the app auto-derives initials from the shop name (Mejason Media
   // Production → MMP, EDOS CENTRE → EC). Owners can override in Settings.
   idPrefix: '',
-  bizName: 'Mejason Media Production',
-  bizLocation: 'Joventure Hotel, 1st Floor, Kibos Rd, Kisumu',
-  bizPhone1: '+254 700 864849',
-  bizPhone2: '+254 768 375441',
-  bizPhone3: '+254 771 400 615',
-  mpesaPaybill: '522533',
-  mpesaAccount: '7616319',
-  mpesaTill: '9013189',
-  bankName: 'KCB Bank',
-  bankAccount: '1310465029',
-  bankHolder: 'Mejason Media Production',
-  bankBranch: 'Kisumu',
-  facebook: 'Mejason Media Production',
-  instagram: '@mejasonmedia',
-  email: 'mejasanw@gmail.com',
-  website: 'www.mejasonmedia.co.ke',
+  // Identity and payment details are deliberately blank. These defaults apply
+  // to every shop that has not saved its own Settings yet, so seeding them with
+  // a real business's till and bank account would put those on another shop's
+  // invoices and send its customers' money to the wrong company. Blank is the
+  // safe default: each shop fills these in under Settings, and bizName falls
+  // back to the shop's registered name until it does.
+  bizName: '',
+  bizLocation: '',
+  bizPhone1: '',
+  bizPhone2: '',
+  bizPhone3: '',
+  mpesaPaybill: '',
+  mpesaAccount: '',
+  mpesaTill: '',
+  bankName: '',
+  bankAccount: '',
+  bankHolder: '',
+  bankBranch: '',
+  facebook: '',
+  instagram: '',
+  email: '',
+  website: '',
   kraPin: '',
-  paymentInstructions: 'KCB Bank — Account 1310465029\nM-Pesa Till — 9013189',
-  invoiceFootnote: 'We Deliver Quality.',
+  paymentInstructions: '',
+  invoiceFootnote: '',
   quotationTerms: '• This quotation is valid for 30 days from the date above\n• Price subject to change if event date or requirements change\n• Confirm this quote and provide 50% deposit to secure the date\n• Final balance due 7 days before event date',
   invoiceTerms: '• Payment is due within 30 days of invoice date\n• A 1.5% monthly finance charge applies on overdue balances\n• Please reference the invoice number on your payment\n• Disputes must be raised within 7 days of invoice date',
   departments: [
@@ -1928,6 +1935,30 @@ const SETTINGS_DEFAULTS = {
   ]
 };
 let SETTINGS = { ...SETTINGS_DEFAULTS };
+
+// The identity and payment details that go out on this shop's emails. Read
+// from its own saved Settings — outbound mail must never carry another shop's
+// till or bank account, so anything unset is sent through empty and the email
+// simply leaves that line out.
+function shopEmailDetails() {
+  const S = SETTINGS || {};
+  return {
+    name:         S.bizName || currentShopName || '',
+    location:     S.bizLocation || '',
+    phones:       [S.bizPhone1, S.bizPhone2, S.bizPhone3].filter(Boolean),
+    email:        S.email || '',
+    website:      S.website || '',
+    kraPin:       S.kraPin || '',
+    mpesaTill:    S.mpesaTill || '',
+    mpesaPaybill: S.mpesaPaybill || '',
+    mpesaAccount: S.mpesaAccount || '',
+    bankName:     S.bankName || '',
+    bankAccount:  S.bankAccount || '',
+    bankHolder:   S.bankHolder || '',
+    bankBranch:   S.bankBranch || '',
+    footnote:     S.invoiceFootnote || '',
+  };
+}
 
 // Get departments from settings (fallback to SETTINGS_DEFAULTS if not set)
 function getDepts() {
@@ -1946,26 +1977,56 @@ async function loadShopSettings() {
       return;
     }
   } catch(e) {}
-  // Fallback: try shop-namespaced localStorage (migration from old key)
+  // Fallback: settings this browser holds locally.
+  //
+  // Only the shop-namespaced key is promoted to the cloud below. The bare
+  // 'mmp_settings' key predates namespacing and is shared by every shop opened
+  // in this browser, so it cannot be attributed to one shop with any
+  // confidence — it is still loaded here, but never pushed up, or an operator
+  // running two shops from one machine would copy one shop's till and bank
+  // details onto the other.
+  let ownedLocally = false;
   try {
-    const cached = localStorage.getItem('mmp_settings_' + currentShopId) || localStorage.getItem('mmp_settings');
+    const own = localStorage.getItem('mmp_settings_' + currentShopId);
+    const cached = own || localStorage.getItem('mmp_settings');
     if (cached) {
+      ownedLocally = !!own;
       const { _services, ...settingsOnly } = JSON.parse(cached);
       SETTINGS = { ...SETTINGS_DEFAULTS, ...settingsOnly };
       DEPTS = getDepts();  // Update DEPTS from settings
       if (_services && Array.isArray(_services) && _services.length) SERVICES = _services;
     }
   } catch(e) {}
+
+  // Settings reached this shop from localStorage, which means the cloud has no
+  // row for it. Push one up so the details survive a different browser or
+  // device. This is the half of the migration SQL cannot do — the data lives on
+  // this machine, not in the database.
+  if (ownedLocally) {
+    const err = await persistShopSettings();
+    if (!err) console.info('Shop settings promoted from this browser to the cloud.');
+  }
 }
 
+// Returns null on success, or the error — callers can tell the two apart.
+// supabase-js resolves with { error } rather than throwing, so the result has
+// to be inspected; ignoring it is what hid the fact that these writes were
+// being refused by RLS and settings were living in localStorage alone.
 async function persistShopSettings() {
-  if (!useSupabase || !currentShopId) return;
+  if (!useSupabase || !currentShopId) return null;
   const saved = { ...SETTINGS, _services: SERVICES };
+  localStorage.setItem('mmp_settings_' + currentShopId, JSON.stringify(saved));
   try {
-    await sb.from('pos_shop_settings').upsert({ shop_id: currentShopId, settings: saved, updated_at: new Date().toISOString() });
-    localStorage.setItem('mmp_settings_' + currentShopId, JSON.stringify(saved));
+    const { error } = await sb.from('pos_shop_settings')
+      .upsert({ shop_id: currentShopId, settings: saved, updated_at: new Date().toISOString() });
+    if (error) {
+      console.error('Shop settings did not save to the cloud — kept in this browser only.', error);
+      return error;
+    }
+    return null;
   } catch(e) {
-    localStorage.setItem('mmp_settings_' + currentShopId, JSON.stringify(saved));
+    console.error('Shop settings did not save to the cloud — kept in this browser only.', e);
+    return e;
   }
 }
 
@@ -3009,7 +3070,13 @@ function renderPOS() {
               <div id="mpesa-direct-note" style="display:none;font-size:10px;color:#166534;background:#dcfce7;border-radius:5px;padding:6px 8px">
                 <i class="ti ti-check"></i> Customer paid directly to the till — no PIN prompt needed.
               </div>
-              <div style="font-size:10px;color:var(--muted);margin-top:6px">Paybill: <strong style="color:var(--green)">522533</strong> · Acc: <strong style="color:var(--green)">7616319</strong> · Till: <strong style="color:var(--green)">9013189</strong></div>
+              ${(SETTINGS.mpesaPaybill || SETTINGS.mpesaTill)
+                ? `<div style="font-size:10px;color:var(--muted);margin-top:6px">${[
+                     SETTINGS.mpesaPaybill ? `Paybill: <strong style="color:var(--green)">${SETTINGS.mpesaPaybill}</strong>` : '',
+                     SETTINGS.mpesaAccount ? `Acc: <strong style="color:var(--green)">${SETTINGS.mpesaAccount}</strong>` : '',
+                     SETTINGS.mpesaTill    ? `Till: <strong style="color:var(--green)">${SETTINGS.mpesaTill}</strong>` : '',
+                   ].filter(Boolean).join(' · ')}</div>`
+                : `<div style="font-size:10px;color:#b45309;margin-top:6px"><i class="ti ti-alert-triangle"></i> No M-Pesa till or paybill set — add yours under Settings before taking M-Pesa payments.</div>`}
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:7px;padding:5px 8px">
@@ -3444,10 +3511,15 @@ async function checkout() {
 const SAFARICOM_CONFIG = {
   consumerKey: 'YOUR_CONSUMER_KEY',
   consumerSecret: 'YOUR_CONSUMER_SECRET',
-  businessShortCode: '9013189',
   passkey: 'YOUR_PASSKEY',
   callbackUrl: 'https://yourdomain.com/api/mpesa-callback',
 };
+
+// The shop's own till or paybill, resolved at call time because SETTINGS load
+// after login. There is deliberately no fallback: pushing an STK against a
+// hardcoded shortcode would send this shop's customer money to whichever
+// business that shortcode belongs to.
+const mpesaShortCode = () => String(SETTINGS.mpesaTill || SETTINGS.mpesaPaybill || '').trim();
 
 async function generateMpesaToken() {
   const auth = btoa(SAFARICOM_CONFIG.consumerKey + ':' + SAFARICOM_CONFIG.consumerSecret);
@@ -3461,23 +3533,29 @@ async function generateMpesaToken() {
 }
 
 async function initiateMpesaSTK(phone, amount, invoiceId) {
+  const shortCode = mpesaShortCode();
+  if (!shortCode) {
+    alert('No M-Pesa till or paybill is set for this shop. Add yours under Settings before taking M-Pesa payments.');
+    return false;
+  }
   const token = await generateMpesaToken();
   if (!token) { alert('Failed to connect to M-Pesa. Please try again.'); return false; }
   const timestamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
-  const password = btoa(SAFARICOM_CONFIG.businessShortCode + SAFARICOM_CONFIG.passkey + timestamp);
+  const password = btoa(shortCode + SAFARICOM_CONFIG.passkey + timestamp);
   const phoneFormatted = phone.startsWith('254') ? phone : '254' + phone.slice(1);
   try {
     const resp = await fetch('https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        BusinessShortCode: SAFARICOM_CONFIG.businessShortCode,
+        BusinessShortCode: shortCode,
         Password: password, Timestamp: timestamp,
         TransactionType: 'CustomerPayBillOnline',
         Amount: Math.round(amount),
-        PartyA: phoneFormatted, PartyB: SAFARICOM_CONFIG.businessShortCode,
+        PartyA: phoneFormatted, PartyB: shortCode,
         PhoneNumber: phoneFormatted, CallBackURL: SAFARICOM_CONFIG.callbackUrl,
-        AccountReference: invoiceId, TransactionDesc: 'Mejason Media Services',
+        AccountReference: invoiceId,
+        TransactionDesc: (SETTINGS.bizName || currentShopName || 'Services').slice(0, 13),
       })
     });
     const result = await resp.json();
@@ -3495,7 +3573,7 @@ function showMpesaSTK(inv, phone) {
       <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;margin-bottom:14px">
         <div style="font-size:11px;color:var(--muted);margin-bottom:2px">Amount</div>
         <div style="font-size:22px;font-weight:700;color:var(--green)">${fmt(inv.total)}</div>
-        <div style="font-size:10px;color:var(--muted);margin-top:4px">Paybill <strong>${SAFARICOM_CONFIG.businessShortCode}</strong> · Acc <strong>${inv.id}</strong></div>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px">Paybill <strong>${mpesaShortCode() || '—'}</strong> · Acc <strong>${inv.id}</strong></div>
       </div>
       <div style="display:flex;align-items:center;gap:6px;justify-content:center;font-size:11px"><div class="spin"></div><span>Waiting for PIN…</span></div>
     </div>`;
@@ -3797,7 +3875,7 @@ function buildInvoiceHTML(inv) {
       <div class="inv-logo-block">
         ${S.logoDataUrl
           ? `<img src="${S.logoDataUrl}" style="max-height:64px;max-width:180px;object-fit:contain;display:block"/>`
-          : `<div class="inv-logo-mark">M</div><div class="inv-logo-tagline">Mejasan Media</div>`}
+          : `<div class="inv-logo-mark">${deriveInitials(S.bizName || currentShopName).charAt(0)}</div><div class="inv-logo-tagline">${S.bizName || currentShopName || ''}</div>`}
       </div>
       <div class="inv-title-block">
         <h1>INVOICE</h1>
@@ -3958,7 +4036,7 @@ function buildQuotationHTML(inv) {
       <div class="inv-logo-block">
         ${S.logoDataUrl
           ? `<img src="${S.logoDataUrl}" style="max-height:64px;max-width:180px;object-fit:contain;display:block"/>`
-          : `<div class="inv-logo-mark">M</div><div class="inv-logo-tagline">Mejasan Media</div>`}
+          : `<div class="inv-logo-mark">${deriveInitials(S.bizName || currentShopName).charAt(0)}</div><div class="inv-logo-tagline">${S.bizName || currentShopName || ''}</div>`}
       </div>
       <div class="inv-title-block">
         <h1>QUOTATION</h1>
@@ -5673,7 +5751,7 @@ async function sendStatementEmail(client, docs) {
           const response = await fetch('/.netlify/functions/send-invoice-email', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: client.email, clientName: client.name, documents, pdfBase64: base64PDF, fileName: filename })
+            body: JSON.stringify({ email: client.email, clientName: client.name, documents, pdfBase64: base64PDF, fileName: filename, shop: shopEmailDetails() })
           });
           if (response.ok) {
             updateStatusMessage(statusMsg, `✓ Email sent to ${client.email}!`);
@@ -8040,9 +8118,17 @@ async function saveSettings() {
   SETTINGS.vatEnabled = !!document.getElementById('set-vatEnabled')?.checked;
   SETTINGS.vatRate    = parseFloat(document.getElementById('set-vatRate')?.value) || 16;
   DEPTS = getDepts();  // Update DEPTS after saving
-  await persistShopSettings();
+  const saveErr = await persistShopSettings();
   const msg = document.getElementById('settings-saved-msg');
-  if (msg) { msg.style.display = 'inline-flex'; setTimeout(() => msg.style.display = 'none', 2500); }
+  if (saveErr) {
+    // Do not show "Saved" for a write the database refused — that is exactly
+    // how these settings ended up living in one browser and nowhere else.
+    alert('Settings were kept in this browser, but could not be saved to the cloud:\n\n'
+      + (saveErr.message || saveErr)
+      + '\n\nThey will be lost if you clear site data or sign in from another device.');
+  } else if (msg) {
+    msg.style.display = 'inline-flex'; setTimeout(() => msg.style.display = 'none', 2500);
+  }
   renderDepartmentsList();  // Refresh departments list
 }
 

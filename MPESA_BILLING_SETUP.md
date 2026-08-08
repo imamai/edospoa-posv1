@@ -162,6 +162,121 @@ supabase secrets set --project-ref cnlyuwslpcgosgwdmzav \
   NETLIFY_SITE_URL=https://<your-netlify-site>.netlify.app
 ```
 
+### Setting NETLIFY_SITE_URL without the CLI
+
+`billing-daily-check` builds the reminder URL by concatenation:
+
+```ts
+fetch(`${NETLIFY_SITE_URL}/.netlify/functions/send-billing-reminder`, …)
+```
+
+so the value is the **site origin only — scheme included, no trailing slash and
+no path**: `https://your-site.netlify.app`, not `https://your-site.netlify.app/`
+and not `.../.netlify/functions`.
+
+**1 — find the URL.** In the Netlify dashboard open the site that hosts these
+functions and copy the address under the site name (the `*.netlify.app` one, or
+your custom domain if the functions are served from it). Confirm it is the right
+site before going further:
+
+```bash
+curl -i https://<your-site>.netlify.app/.netlify/functions/send-billing-reminder
+```
+
+A `405 Method not allowed` is the correct answer — the function is there and
+only accepts POST. A `404` means you have the wrong site or the functions have
+not been deployed to it.
+
+**2 — set the secret.** Open
+
+```
+https://supabase.com/dashboard/project/cnlyuwslpcgosgwdmzav/settings/functions
+```
+
+which is Project Settings → Edge Functions → Secrets. Add:
+
+| Name | Value |
+| --- | --- |
+| `NETLIFY_SITE_URL` | `https://<your-site>.netlify.app` |
+
+Save. Secrets are read at invocation, so no redeploy is needed for the secret
+itself — but redeploy `billing-daily-check` anyway whenever its code has changed.
+
+**3 — check it took.** Invoke the function and read what comes back:
+
+```bash
+curl -X POST https://cnlyuwslpcgosgwdmzav.functions.supabase.co/billing-daily-check \
+  -H "Authorization: Bearer <service-role-key>"
+```
+
+It returns `{ checked, remindedUpcoming, suspended, invoiced, errors }`. If
+`errors` is empty but no mail arrives, the secret is missing or wrong — the
+function treats an unset `NETLIFY_SITE_URL` as "skip sending" and stays silent
+about it. Supabase Dashboard → Edge Functions → `billing-daily-check` → Logs
+shows each run.
+
+### Who the mail comes from
+
+Everything EdosPoa sends — billing reminders and invoice emails — goes out as
+**`info@edoscentre.co.ke`**, displayed as `EDOS Centre <info@edoscentre.co.ke>`.
+That is the default in both Netlify functions; `EMAIL_FROM` overrides it.
+
+Two separate identities are involved and they are easy to confuse:
+
+| Variable | What it is |
+| --- | --- |
+| `EMAIL_FROM` | the address recipients see, and replies go to |
+| `EMAIL_USER` | the mailbox that logs in to the SMTP server |
+| `EMAIL_PASS` | that mailbox's password (an app password, not the login one) |
+
+They are only the same address when the SMTP account *is*
+`info@edoscentre.co.ke`.
+
+**Do not send as `info@edoscentre.co.ke` through a personal Gmail account.**
+`edoscentre.co.ke`'s SPF record does not authorise Google to send on its behalf,
+so Gmail and Outlook will put those reminders in spam or reject them. Pick one:
+
+1. **The domain's own mail server (cPanel)** — you already host
+   `edoscentre.co.ke` on cPanel, so create the `info@` mailbox there and set:
+
+   ```
+   SMTP_HOST = mail.edoscentre.co.ke
+   SMTP_PORT = 465
+   SMTP_SECURE = true
+   EMAIL_USER = info@edoscentre.co.ke
+   EMAIL_PASS = <that mailbox's password>
+   EMAIL_FROM = EDOS Centre <info@edoscentre.co.ke>
+   ```
+
+   Use `SMTP_PORT=587` with `SMTP_SECURE=false` if 465 is blocked (that is
+   STARTTLS, still encrypted — `secure:false` refers to the initial handshake,
+   not to sending in the clear).
+
+2. **Google Workspace on the domain** — leave `SMTP_HOST` unset, set
+   `EMAIL_USER=info@edoscentre.co.ke` with a Google app password.
+
+3. **A Gmail account with the address added** under Settings → Accounts →
+   "Send mail as", verified. Works, but delivery is weaker than options 1–2.
+
+Whichever you choose, publish these DNS records for `edoscentre.co.ke` or the
+mail will still land in spam:
+
+- **SPF** — one `TXT` record at the root authorising your sender, e.g.
+  `v=spf1 +a +mx include:_spf.google.com ~all` for Workspace, or the include
+  line your cPanel host specifies. One SPF record only; merge, never duplicate.
+- **DKIM** — enable it in cPanel (Email Deliverability) or Workspace and add
+  the `TXT` record it generates.
+- **DMARC** — `_dmarc` `TXT`, start at `v=DMARC1; p=none; rua=mailto:info@edoscentre.co.ke`
+  and tighten to `p=quarantine` once reports look clean.
+
+All of these are set **on Netlify** (Site configuration → Environment
+variables), because that is where nodemailer reads them — not on Supabase.
+
+> The `[env]` / `[env.production.context]` blocks in `netlify.toml` are not a
+> syntax Netlify recognises — the real keys are `[build.environment]` and
+> `[context.<name>.environment]` — so those blocks do nothing and every value
+> above must come from the Netlify UI.
+
 `NETLIFY_SITE_URL` is where `billing-daily-check` posts reminder emails — it
 must point at whichever Netlify site has `netlify/functions/send-billing-reminder.js`
 deployed (same site as the existing `send-invoice-email.js`).
