@@ -241,6 +241,27 @@ tr:hover td{background:#faf8f4}
 </head>
 <body>
 
+<!-- ADMIN LOGIN GATE — this page manages every tenant on the platform, so it
+     must not open straight into the data. Credentials are the owner/admin
+     pos_staff accounts of the shop flagged is_platform_account. When the page
+     is opened from inside the POS (Platform Admin), the POS hands over its
+     already-authenticated session and this screen never appears. -->
+<div id="adminGate" style="position:fixed;inset:0;background:#f5f2eb;z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#fff;border-radius:16px;max-width:380px;width:100%;padding:30px 26px;box-shadow:0 18px 50px rgba(0,0,0,.14)">
+    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.3rem">
+      <div class="brand-logo" style="width:34px;height:34px">EP</div>
+      <div style="font-weight:800;font-size:1.05rem">EdosPoa Admin</div>
+    </div>
+    <div style="font-size:.8rem;color:var(--muted);margin-bottom:1.2rem" id="gate-sub">Platform owner sign-in</div>
+    <div class="form-group"><label class="form-label">Username</label>
+      <input class="form-input" id="gate-user" autocomplete="username" onkeydown="if(event.key==='Enter')adminLogin()"/></div>
+    <div class="form-group"><label class="form-label">Password</label>
+      <input class="form-input" id="gate-pass" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')adminLogin()"/></div>
+    <button class="btn btn-green" id="gate-btn" onclick="adminLogin()" style="width:100%;margin-top:.4rem">Sign In</button>
+    <div id="gate-err" style="font-size:.78rem;color:var(--red);margin-top:.6rem;min-height:18px"></div>
+  </div>
+</div>
+
 <aside class="sidebar">
   <div class="brand">
     <div class="brand-logo">EP</div>
@@ -265,6 +286,8 @@ tr:hover td{background:#faf8f4}
     <div class="topbar-right">
       <input class="search-box" type="text" placeholder="Search clients…" id="searchInput" oninput="filterClients()" style="display:none"/>
       <button class="btn btn-green" id="onboardBtn" onclick="openOnboardModal()" style="display:none">+ Onboard Client</button>
+      <span id="adminWho" style="font-size:.78rem;color:var(--muted)"></span>
+      <button class="btn btn-outline btn-sm" id="adminLogoutBtn" onclick="adminLogout()">Sign out</button>
     </div>
   </div>
 
@@ -278,10 +301,11 @@ tr:hover td{background:#faf8f4}
         <div class="stat-card amber"><div class="stat-icon">🔁</div><div class="stat-label">Trial</div><div class="stat-value" id="stat-trial">—</div><div class="stat-sub">Free trial</div></div>
         <div class="stat-card red"><div class="stat-icon">⏸</div><div class="stat-label">Suspended</div><div class="stat-value" id="stat-suspended">—</div><div class="stat-sub">Overdue or paused</div></div>
       </div>
-      <div class="stats-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:1.4rem">
+      <div class="stats-row" style="grid-template-columns:repeat(4,1fr);margin-bottom:1.4rem">
         <div class="stat-card blue owner-only"><div class="stat-icon">💰</div><div class="stat-label">Monthly MRR</div><div class="stat-value" id="dash-mrr">—</div><div class="stat-sub">Active subscriptions</div></div>
         <div class="stat-card green"><div class="stat-icon">🧩</div><div class="stat-label">Active Subscriptions</div><div class="stat-value" id="dash-subs">—</div><div class="stat-sub">Module assignments</div></div>
         <div class="stat-card amber"><div class="stat-icon">📊</div><div class="stat-label">Avg per Client</div><div class="stat-value" id="dash-avg">—</div><div class="stat-sub">Revenue per client</div></div>
+        <div class="stat-card blue owner-only"><div class="stat-icon">📲</div><div class="stat-label">Collected This Month</div><div class="stat-value" id="dash-collected">—</div><div class="stat-sub">M-Pesa + manual payments</div></div>
       </div>
       <div class="dash-grid" style="display:grid;grid-template-columns:1.5fr 1fr;gap:1rem;margin-bottom:1.4rem">
         <div class="table-card">
@@ -301,11 +325,20 @@ tr:hover td{background:#faf8f4}
         <div class="table-header">
           <span class="table-title">All Clients</span>
           <span id="clientCount" style="font-size:.8rem;color:var(--muted)"></span>
+          <label style="font-size:.78rem;color:var(--muted);display:flex;align-items:center;gap:5px;margin-left:auto;cursor:pointer">
+            <input type="checkbox" id="hidePlatformAccount" checked onchange="filterClients()"/> Hide platform account
+          </label>
+        </div>
+        <div id="bulkActionBar" style="display:none;padding:.6rem 1.4rem;background:#f5f2eb;border-bottom:1px solid rgba(0,0,0,.08);align-items:center;gap:.8rem;font-size:.8rem">
+          <span id="bulkSelectedCount"></span>
+          <button class="btn btn-outline btn-sm" onclick="bulkSetAccountType(true)">🏠 Mark selected as Platform</button>
+          <button class="btn btn-outline btn-sm" onclick="bulkSetAccountType(false)">🏪 Mark selected as Tenant</button>
+          <button class="btn btn-outline btn-sm" onclick="clearClientSelection()">Clear</button>
         </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Business</th><th>Plan</th><th>Phone</th><th>Location</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
-            <tbody id="clientsTableBody"><tr><td colspan="7"><div class="loading"><div class="spinner"></div>Loading…</div></td></tr></tbody>
+            <thead><tr><th><input type="checkbox" id="selectAllClients" onchange="toggleSelectAllClients(this.checked)"/></th><th>Business</th><th>Plan</th><th>Phone</th><th>Location</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead>
+            <tbody id="clientsTableBody"><tr><td colspan="8"><div class="loading"><div class="spinner"></div>Loading…</div></td></tr></tbody>
           </table>
         </div>
       </div>
@@ -364,7 +397,7 @@ tr:hover td{background:#faf8f4}
             <div class="csp-empty">Select a client above to manage their modules</div>
           </div>
           <div class="mrr-bar owner-only" id="mrrBar" style="display:none">
-            <span class="mrr-label">Monthly subscription total</span>
+            <span class="mrr-label">Plan billing — charged every 30 days</span>
             <span class="mrr-value" id="mrrValue">KES 0</span>
           </div>
         </div>
@@ -448,9 +481,9 @@ tr:hover td{background:#faf8f4}
     <div class="form-row">
       <div class="form-group"><label class="form-label">Plan</label>
         <select class="form-input" id="f-plan">
-          <option value="basic">Basic — KES 1,500/mo</option>
-          <option value="standard" selected>Standard — KES 4,500/mo</option>
-          <option value="premium">Premium — KES 10,000/mo</option>
+          <option value="basic">Basic — KES 1,000 / 30 days</option>
+          <option value="standard" selected>Standard — KES 1,500 / 30 days</option>
+          <option value="premium">Premium — KES 2,500 / 30 days</option>
         </select>
       </div>
       <div class="form-group"><label class="form-label">Status</label>
@@ -526,6 +559,45 @@ create policy "allow all" on module_scripts for all using (true) with check (tru
   </div>
 </div>
 
+<!-- BILLING MODAL -->
+<div class="modal-overlay" id="billingModal">
+  <div class="modal" style="max-width:640px;width:92vw">
+    <div class="modal-title">
+      💳 Billing — <span id="bm-name" style="color:var(--green)"></span>
+      <button class="modal-close" onclick="closeOverlay('billingModal')">✕</button>
+    </div>
+
+    <div id="bm-enable-row" style="margin-bottom:.8rem"></div>
+    <div id="bm-summary" style="display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-bottom:1rem"></div>
+    <div id="bm-invoice-row" style="margin-bottom:1rem"></div>
+
+    <div class="form-group" style="border-top:1px solid var(--border);padding-top:.9rem">
+      <label class="form-label">Record Offline Payment (cash / bank transfer / other)</label>
+      <div class="form-row">
+        <div class="form-group"><input class="form-input" id="bm-amount" type="number" min="1" placeholder="Amount (KES)"/></div>
+        <div class="form-group">
+          <select class="form-input" id="bm-method">
+            <option value="manual">Manual — Cash</option>
+            <option value="manual-bank">Manual — Bank Transfer</option>
+            <option value="manual-other">Manual — Other</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-green btn-sm" id="bm-record-btn" onclick="recordOfflinePayment()">💾 Record Payment</button>
+      <div id="bm-status" style="font-size:.78rem;margin-top:.5rem;min-height:16px"></div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:.9rem;margin-top:.9rem">
+      <label class="form-label">Payment History</label>
+      <div id="bm-history" style="max-height:220px;overflow-y:auto"></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeOverlay('billingModal')">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="confirmBox">
   <div class="confirm-inner">
     <div class="confirm-icon" id="ci-icon">⚠️</div>
@@ -552,10 +624,27 @@ const SB = createClient(
 let allClients   = [];
 let allModules   = [];
 let allSubs      = [];
+let allPayments  = [];
 let tierFilter   = 'All';
 let selectedMods = new Set();
 let activeClientId = '';
+let billingClientId = '';
+let billingPayments = [];   // payment rows shown in the open billing modal
+let selectedClientIds = new Set();
 let isOwner      = false;  // Track if current user is owner
+let adminSession = null;   // set once the access gate passes; null = locked
+
+// ── PLAN PRICING ──────────────────────────────────────────────
+// What a tenant pays per 30-day period, keyed on clients.event (the plan).
+// This is the single source of truth for every billing figure in the admin.
+// Module subscriptions decide what a tenant may *use*; the plan decides what
+// they are *charged*. Keep in step with PLAN_PRICES in edospoa-pos.html and
+// supabase/functions/_shared/billing.ts.
+const PLAN_PRICES = { basic:1000, standard:1500, premium:2500, trial:0 };
+const planPriceFor = plan => {
+  const p = PLAN_PRICES[String(plan||'').toLowerCase().trim()];
+  return p===undefined ? PLAN_PRICES.basic : p;
+};
 
 // ── MEJASON POS MODULE DEFINITIONS ───────────────────────────
 // Categorized from Mejason POS source into 4 tiers
@@ -728,7 +817,8 @@ const MEJASON_CLIENT = {
   event: 'premium',
   notes: 'Kisumu, Joventure Hotel 1st Floor · Media Production Studio',
   status: 'active',
-  created_at: new Date().toISOString()
+  created_at: new Date().toISOString(),
+  is_platform_account: true
 };
 
 // ── UTILS ─────────────────────────────────────────────────────
@@ -736,6 +826,11 @@ const fmt   = n => 'KES ' + Number(n).toLocaleString('en-KE',{minimumFractionDig
 const fmtK  = n => n>=1e6?(n/1e6).toFixed(1)+'M':n>=1000?(n/1000).toFixed(1)+'K':String(Math.round(n));
 const fdate = d => d ? new Date(d).toLocaleDateString('en-KE',{day:'2-digit',month:'short',year:'numeric'}) : '—';
 const esc   = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+// The seeded "Mejason Media Production" row is the platform owner's own
+// account (created from the Seed section), not a paying tenant — keep it
+// out of tenant counts/MRR/lists so those numbers reflect real subscribers.
+const tenantClients = () => allClients.filter(c=>!c.is_platform_account);
 const TIER_CLS = {ESSENTIAL:'tier-e',STANDARD:'tier-s',PREMIUM:'tier-p',SPECIALTY:'tier-x'};
 const PLAN_TIERS = {basic:['ESSENTIAL'],standard:['ESSENTIAL','STANDARD'],premium:['ESSENTIAL','STANDARD','PREMIUM'],trial:['ESSENTIAL']};
 
@@ -763,7 +858,7 @@ function confirmResolve(v){document.getElementById('confirmBox').classList.remov
 
 // ── ONLINE ────────────────────────────────────────────────────
 window.addEventListener('offline',()=>{document.getElementById('onlineDot').style.background='var(--amber)';document.getElementById('syncStatus').textContent='Offline';});
-window.addEventListener('online', ()=>{document.getElementById('onlineDot').style.background='var(--green)';document.getElementById('syncStatus').textContent='Live';init();});
+window.addEventListener('online', ()=>{document.getElementById('onlineDot').style.background='var(--green)';document.getElementById('syncStatus').textContent='Live';if(adminSession)init();});
 
 // ── NAVIGATION ────────────────────────────────────────────────
 function showSection(id,btn){
@@ -784,7 +879,67 @@ function navTo(id){
 }
 
 // ── BADGES ────────────────────────────────────────────────────
-function statusBadge(s){const m={active:'green',trial:'amber',suspended:'red',inactive:'muted'};return `<span class="badge badge-${m[s]||'muted'}"><span class="badge-dot"></span>${s}</span>`;}
+function accountTypeBadge(c){
+  const badge = c.is_platform_account
+    ? `<span class="badge badge-muted" title="Your own EdosPoa account — not a paying tenant">🏠 Platform</span>`
+    : `<span class="badge badge-green" title="Paying tenant of the EdosPoa platform">🏪 Tenant</span>`;
+  return `${badge} <a href="#" onclick="toggleAccountType('${c.id}',${!!c.is_platform_account});return false" style="font-size:.68rem;color:var(--muted);text-decoration:underline">change</a>`;
+}
+
+async function toggleAccountType(id,current){
+  const {error}=await SB.from('clients').update({is_platform_account:!current}).eq('id',id);
+  if(error){toast('Failed to update account type','error');return;}
+  toast(!current?'Marked as platform account ✓':'Marked as tenant ✓');
+  await init();
+}
+
+// ── BULK SELECTION ────────────────────────────────────────────
+function toggleClientSelect(id,checked){
+  if(checked) selectedClientIds.add(id); else selectedClientIds.delete(id);
+  updateBulkBar();
+}
+
+function toggleSelectAllClients(checked){
+  document.querySelectorAll('.client-select').forEach(cb=>{
+    cb.checked=checked;
+    if(checked) selectedClientIds.add(cb.dataset.id); else selectedClientIds.delete(cb.dataset.id);
+  });
+  updateBulkBar();
+}
+
+function clearClientSelection(){
+  selectedClientIds.clear();
+  const selectAll=document.getElementById('selectAllClients');
+  if(selectAll) selectAll.checked=false;
+  document.querySelectorAll('.client-select').forEach(cb=>cb.checked=false);
+  updateBulkBar();
+}
+
+function updateBulkBar(){
+  const bar=document.getElementById('bulkActionBar');
+  const count=selectedClientIds.size;
+  if(!bar) return;
+  bar.style.display=count>0?'flex':'none';
+  const countEl=document.getElementById('bulkSelectedCount');
+  if(countEl) countEl.textContent=`${count} selected`;
+}
+
+async function bulkSetAccountType(isPlatform){
+  if(!selectedClientIds.size) return;
+  const ids=[...selectedClientIds];
+  const {error}=await SB.from('clients').update({is_platform_account:isPlatform}).in('id',ids);
+  if(error){toast('Bulk update failed','error');return;}
+  toast(`${ids.length} client${ids.length!==1?'s':''} marked as ${isPlatform?'platform account':'tenant'} ✓`);
+  selectedClientIds.clear();
+  await init();
+  updateBulkBar();
+}
+
+function statusBadge(s,autoSuspended){
+  const m={active:'green',trial:'amber',suspended:'red',inactive:'muted'};
+  const label=(s==='suspended'&&autoSuspended)?'suspended (overdue)':s;
+  return `<span class="badge badge-${m[s]||'muted'}"><span class="badge-dot"></span>${label}</span>`;
+}
 function invoiceBadge(s){const m={paid:'green',pending:'amber',overdue:'red',cancelled:'muted'};return `<span class="badge badge-${m[s]||'muted'}">${s}</span>`;}
 function planChip(p){const cls={basic:'plan-basic',standard:'plan-standard',premium:'plan-premium',trial:'plan-trial'};return `<span class="${cls[p]||'plan-basic'}">${(p||'basic').charAt(0).toUpperCase()+(p||'basic').slice(1)}</span>`;}
 
@@ -814,7 +969,7 @@ async function checkOwnerStatus(){
 function updateMRRVisibility(){
   const mrrElements = document.querySelectorAll('.stat-card.blue');
   mrrElements.forEach(el => {
-    if(el.querySelector('#dash-mrr') || el.querySelector('#mod-mrr')) {
+    if(el.querySelector('#dash-mrr') || el.querySelector('#mod-mrr') || el.querySelector('#dash-collected')) {
       el.classList.toggle('hidden', !isOwner);
     }
   });
@@ -823,66 +978,112 @@ function updateMRRVisibility(){
 }
 
 // ── LOAD ALL DATA ─────────────────────────────────────────────
+// PostgREST caps every response at 1000 rows, so any table that can outgrow
+// that has to be walked in pages — otherwise rows silently vanish from the
+// admin with no error to show for it.
+const PAGE_SIZE=1000;
+async function fetchAllPages(buildQuery){
+  const out=[];
+  for(let from=0;;from+=PAGE_SIZE){
+    const {data,error}=await buildQuery().range(from,from+PAGE_SIZE-1);
+    if(error){console.error('fetchAllPages',error);break;}
+    out.push(...(data||[]));
+    if(!data||data.length<PAGE_SIZE) break;
+  }
+  return out;
+}
+
+// The `clients` table does double duty: platform tenants (shop accounts,
+// created by addClient() with shop_id left NULL) and every tenant's own
+// customers, which the POS writes with shop_id = that tenant's id. The admin
+// manages tenants only. Without this filter one busy shop's customer list
+// floods the page and pushes real tenants past the 1000-row cap, which is why
+// a tenant could be missing from the Clients table and unfindable by search.
+// The `id.like.client-*` arm is a safety net for a tenant row that has picked
+// up a self-referencing shop_id; isTenantRow() drops anything still scoped to
+// another shop.
+const isTenantRow = c => !c.shop_id || c.shop_id===c.id;
+
 async function init(){
   await checkOwnerStatus();
-  
-  const [cr,mr,sr,ir]=await Promise.all([
-    SB.from('clients').select('*').order('created_at',{ascending:false}),
+
+  const [cr,mr,sr,pr]=await Promise.all([
+    fetchAllPages(()=>SB.from('clients').select('*').or('shop_id.is.null,id.like.client-*').order('created_at',{ascending:false})),
     SB.from('pos_modules').select('*').order('sort_order').order('tier').order('name'),
-    SB.from('client_subscriptions').select('*'),
-    SB.from('pos_invoices').select('amount,status'),
+    fetchAllPages(()=>SB.from('client_subscriptions').select('*').order('activated_at',{ascending:false})),
+    SB.from('mpesa_payments').select('amount,status,completed_at,client_id'),
   ]);
-  allClients = cr.data||[];
+  allClients = cr.filter(isTenantRow);
   allModules = mr.data||[];
-  allSubs    = sr.data||[];
+  allSubs    = sr;
+  allPayments= pr.data||[];
 
   renderStats();
   renderRecentClients();
-  renderInvoiceSummary(ir.data||[]);
   renderClientsTable();
   renderInvoicesTable();
   populateClientPicker();
   renderModLib();
   renderModStats();
+  renderBillingStats();
+}
+
+function renderBillingStats(){
+  const el=document.getElementById('dash-collected');
+  if(!el) return;
+  const now=new Date();
+  const tenantIds=new Set(tenantClients().map(c=>c.id));
+  const collected=allPayments.filter(p=>p.status==='completed'&&p.completed_at&&tenantIds.has(p.client_id)
+      &&new Date(p.completed_at).getMonth()===now.getMonth()
+      &&new Date(p.completed_at).getFullYear()===now.getFullYear())
+    .reduce((s,p)=>s+Number(p.amount||0),0);
+  el.textContent=fmtK(collected);
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────
 function renderStats(){
-  document.getElementById('stat-total').textContent     = allClients.length;
-  document.getElementById('stat-active').textContent    = allClients.filter(c=>c.status==='active').length;
-  document.getElementById('stat-trial').textContent     = allClients.filter(c=>c.status==='trial').length;
-  document.getElementById('stat-suspended').textContent = allClients.filter(c=>c.status==='suspended').length;
+  const tc=tenantClients();
+  document.getElementById('stat-total').textContent     = tc.length;
+  document.getElementById('stat-active').textContent    = tc.filter(c=>c.status==='active').length;
+  document.getElementById('stat-trial').textContent     = tc.filter(c=>c.status==='trial').length;
+  document.getElementById('stat-suspended').textContent = tc.filter(c=>c.status==='suspended').length;
   updateDashboardMRR();
 }
 
+// Recurring revenue = what tenants are actually billed, i.e. the sum of their
+// plan prices. Only tenants who are live and being charged count — suspended
+// and inactive accounts are not producing revenue, and trial sits at 0.
+function platformMRR(){
+  return tenantClients()
+    .filter(c=>['active','trial'].includes(c.status))
+    .reduce((sum,c)=>sum+planPriceFor(c.event),0);
+}
+
 function updateDashboardMRR(){
-  const activeSubs=allSubs.filter(s=>['active','trial'].includes(s.status));
-  const mrr=activeSubs.reduce((sum,s)=>{
-    const m=allModules.find(x=>x.id===s.module_id);
-    return sum+Number(s.custom_fee||m?.monthly_fee||0);
-  },0);
-  const activeClients=allClients.filter(c=>c.status==='active').length;
-  const avgPerClient=activeClients>0?mrr/activeClients:0;
+  const tenantIds=new Set(tenantClients().map(c=>c.id));
+  const activeSubs=allSubs.filter(s=>['active','trial'].includes(s.status)&&tenantIds.has(s.client_id));
+  const mrr=platformMRR();
+  const payingClients=tenantClients().filter(c=>c.status==='active'&&planPriceFor(c.event)>0).length;
+  const avgPerClient=payingClients>0?mrr/payingClients:0;
   document.getElementById('dash-mrr').textContent = fmtK(mrr);
   document.getElementById('dash-subs').textContent = activeSubs.length;
   document.getElementById('dash-avg').textContent = fmt(avgPerClient).replace('KES ','');
 }
 
 function renderRecentClients(){
-  const list=allClients.slice(0,5);
+  const list=tenantClients().slice(0,5);
   if(!list.length){document.getElementById('recentClientsTable').innerHTML='<div class="empty"><div class="empty-icon">🏪</div>No clients yet</div>';return;}
   document.getElementById('recentClientsTable').innerHTML=`<table style="width:100%">
     <thead><tr><th>Business</th><th>Plan</th><th>Status</th><th>Joined</th></tr></thead>
     <tbody>${list.map(c=>`<tr>
       <td><div class="client-name-cell">${esc(c.name||'—')}</div><div class="client-email">${esc(c.email||'')}</div></td>
-      <td>${planChip(c.event)}</td><td>${statusBadge(c.status)}</td><td style="color:var(--muted);font-size:.8rem">${fdate(c.created_at)}</td>
+      <td>${planChip(c.event)}</td><td>${statusBadge(c.status,c.auto_suspended)}</td><td style="color:var(--muted);font-size:.8rem">${fdate(c.created_at)}</td>
     </tr>`).join('')}</tbody></table>`;
 }
 
 function renderInvoiceSummary(data){
-  const paid=data.filter(i=>i.status==='paid').reduce((s,i)=>s+Number(i.amount),0);
-  const pend=data.filter(i=>i.status==='pending').reduce((s,i)=>s+Number(i.amount),0);
-  const over=data.filter(i=>i.status==='overdue').reduce((s,i)=>s+Number(i.amount),0);
+  const sum=st=>data.filter(i=>i.status===st).reduce((s,i)=>s+Number(i.amount||0),0);
+  const paid=sum('paid'), pend=sum('pending'), over=sum('overdue');
   document.getElementById('invoiceSummary').innerHTML=`
     <div style="display:flex;flex-direction:column;gap:.85rem">
       <div style="display:flex;justify-content:space-between"><span style="font-size:.82rem;color:var(--muted)">💰 Collected</span><span style="font-weight:700;color:var(--green)">${fmt(paid)}</span></div>
@@ -896,49 +1097,46 @@ function renderInvoiceSummary(data){
 }
 
 // ── CLIENTS TABLE ─────────────────────────────────────────────
-function renderClientsTable(){
-  const data=allClients;
-  document.getElementById('clientCount').textContent=`${data.length} client${data.length!==1?'s':''}`;
-  if(!data.length){document.getElementById('clientsTableBody').innerHTML=`<tr><td colspan="7"><div class="empty"><div class="empty-icon">🏪</div>No clients</div></td></tr>`;return;}
-  document.getElementById('clientsTableBody').innerHTML=data.map(c=>`
+function clientRowHtml(c){
+  return `
     <tr>
-      <td><div class="client-name-cell">${esc(c.name||'—')}</div><div class="client-email">${esc(c.email||'')}</div></td>
+      <td><input type="checkbox" class="client-select" data-id="${c.id}" ${selectedClientIds.has(c.id)?'checked':''} onchange="toggleClientSelect('${c.id}',this.checked)"/></td>
+      <td><div class="client-name-cell">${esc(c.name||'—')}</div><div class="client-email">${esc(c.email||'')}</div><div style="font-size:.65rem;color:var(--muted)">${esc(c.id)}</div><div style="margin-top:3px">${accountTypeBadge(c)}</div></td>
       <td>${planChip(c.event)}</td>
       <td style="color:var(--muted)">${esc(c.phone||'—')}</td>
       <td style="color:var(--muted);font-size:.8rem">${esc(c.notes||'—')}</td>
-      <td>${statusBadge(c.status)}</td>
+      <td>${statusBadge(c.status,c.auto_suspended)}</td>
       <td style="color:var(--muted);font-size:.8rem">${fdate(c.created_at)}</td>
       <td>
         <div class="action-row">
           <button class="btn btn-outline btn-sm" onclick="manageModules('${c.id}')">🧩 Modules</button>
+          <button class="btn btn-outline btn-sm" onclick="openBillingModal('${c.id}')">💳 Billing</button>
           <button class="btn btn-outline btn-sm" onclick="toggleClientStatus('${c.id}','${c.status}')">${c.status==='active'?'Suspend':'Activate'}</button>
           <button class="btn btn-danger btn-sm" onclick="deleteClient('${c.id}','${esc(c.name)}')">Delete</button>
         </div>
       </td>
-    </tr>`).join('');
+    </tr>`;
+}
+
+function renderClientsTable(){
+  const hidePlatform=document.getElementById('hidePlatformAccount')?.checked;
+  const data=hidePlatform?tenantClients():allClients;
+  document.getElementById('clientCount').textContent=`${data.length} client${data.length!==1?'s':''}`;
+  if(!data.length){document.getElementById('clientsTableBody').innerHTML=`<tr><td colspan="8"><div class="empty"><div class="empty-icon">🏪</div>No clients</div></td></tr>`;return;}
+  document.getElementById('clientsTableBody').innerHTML=data.map(clientRowHtml).join('');
 }
 
 function filterClients(){
-  const q=document.getElementById('searchInput').value.toLowerCase();
-  const filtered=allClients.filter(c=>(c.name||'').toLowerCase().includes(q)||(c.email||'').toLowerCase().includes(q)||(c.notes||'').toLowerCase().includes(q));
+  const q=document.getElementById('searchInput').value.toLowerCase().trim();
+  const hidePlatform=document.getElementById('hidePlatformAccount')?.checked;
+  // A search query always looks across every client, including platform
+  // accounts hidden by default — so you can still find/search for e.g.
+  // 'EDOS Centre' or its id even with "Hide platform account" checked.
+  const base=(q||!hidePlatform)?allClients:tenantClients();
+  const filtered=q?base.filter(c=>(c.name||'').toLowerCase().includes(q)||(c.email||'').toLowerCase().includes(q)||(c.notes||'').toLowerCase().includes(q)||(c.id||'').toLowerCase().includes(q)):base;
   document.getElementById('clientCount').textContent=`${filtered.length} client${filtered.length!==1?'s':''}`;
-  if(!filtered.length){document.getElementById('clientsTableBody').innerHTML=`<tr><td colspan="7"><div class="empty"><div class="empty-icon">🔍</div>No results</div></td></tr>`;return;}
-  document.getElementById('clientsTableBody').innerHTML=filtered.map(c=>`
-    <tr>
-      <td><div class="client-name-cell">${esc(c.name||'—')}</div><div class="client-email">${esc(c.email||'')}</div></td>
-      <td>${planChip(c.event)}</td>
-      <td style="color:var(--muted)">${esc(c.phone||'—')}</td>
-      <td style="color:var(--muted);font-size:.8rem">${esc(c.notes||'—')}</td>
-      <td>${statusBadge(c.status)}</td>
-      <td style="color:var(--muted);font-size:.8rem">${fdate(c.created_at)}</td>
-      <td>
-        <div class="action-row">
-          <button class="btn btn-outline btn-sm" onclick="manageModules('${c.id}')">🧩 Modules</button>
-          <button class="btn btn-outline btn-sm" onclick="toggleClientStatus('${c.id}','${c.status}')">${c.status==='active'?'Suspend':'Activate'}</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteClient('${c.id}','${esc(c.name)}')">Delete</button>
-        </div>
-      </td>
-    </tr>`).join('');
+  if(!filtered.length){document.getElementById('clientsTableBody').innerHTML=`<tr><td colspan="8"><div class="empty"><div class="empty-icon">🔍</div>No results</div></td></tr>`;return;}
+  document.getElementById('clientsTableBody').innerHTML=filtered.map(clientRowHtml).join('');
 }
 
 function manageModules(clientId){
@@ -951,35 +1149,560 @@ function manageModules(clientId){
 
 async function toggleClientStatus(id,cur){
   const ns=cur==='active'?'suspended':'active';
-  const {error}=await SB.from('clients').update({status:ns}).eq('id',id);
-  if(error){toast('Update failed','error');return;}
+  // Clearing auto_suspended on both paths keeps a manual action from being
+  // confused with the nightly billing check's own suspension: reactivating an
+  // overdue tenant must not leave the "suspended (overdue)" flag behind, and a
+  // manual suspend is not an overdue one.
+  const payload = ns==='suspended'
+    ? {status:'suspended', auto_suspended:false, suspended_reason:'Suspended by admin'}
+    : {status:'active',    auto_suspended:false, suspended_reason:null};
+  const {data,error}=await SB.from('clients').update(payload).eq('id',id).select('id');
+  if(error){toast('Update failed: '+error.message,'error');console.error('toggleClientStatus',error);return;}
+  if(!data||!data.length){toast('Update failed — this client no longer exists','error');await init();return;}
   toast(`Client ${ns==='active'?'activated':'suspended'} ✓`);
   await init();
 }
 
+// ── BILLING ───────────────────────────────────────────────────
+// Amount due per 30-day period = the tenant's plan price. Module assignments
+// no longer feed into this: what a tenant can use and what a tenant pays are
+// separate decisions.
+function periodAmountFor(clientId){
+  const c = allClients.find(x=>x.id===clientId);
+  return c ? planPriceFor(c.event) : 0;
+}
+
+// Mirrors supabase/functions/_shared/billing.ts applyPayment() — stacks on
+// remaining time when paying early, extends from now when already lapsed,
+// and rounds amount/periodAmount to detect multi-month payments.
+function computeNewPaidUntil(currentPaidUntil,periodAmount,amountPaid){
+  const monthsCovered = periodAmount>0 ? Math.max(1,Math.round(amountPaid/periodAmount)) : 1;
+  const now = new Date();
+  const base = (currentPaidUntil && new Date(currentPaidUntil) > now) ? new Date(currentPaidUntil) : now;
+  const newPaidUntil = new Date(base.getTime() + monthsCovered*30*24*60*60*1000);
+  return { monthsCovered, newPaidUntil };
+}
+
+function billingStatusLine(c){
+  if(!c.paid_until) return {text:'No billing period set yet',cls:'muted'};
+  const days = Math.ceil((new Date(c.paid_until) - new Date())/(24*60*60*1000));
+  if(days < 0)  return {text:`Overdue by ${Math.abs(days)} day${Math.abs(days)!==1?'s':''}`,cls:'red'};
+  if(days === 0) return {text:'Due today',cls:'amber'};
+  if(days <= 3) return {text:`${days} day${days!==1?'s':''} left — renewal due soon`,cls:'amber'};
+  return {text:`${days} days left`,cls:'green'};
+}
+
+async function openBillingModal(clientId){
+  billingClientId = clientId;
+  const c = allClients.find(x=>x.id===clientId);
+  if(!c){toast('Client not found','error');return;}
+
+  document.getElementById('bm-name').textContent = c.name||'—';
+  document.getElementById('bm-amount').value = '';
+  document.getElementById('bm-status').textContent = '';
+  renderBillingSummary(c);
+  document.getElementById('bm-history').innerHTML = '<div class="empty" style="padding:1rem"><div class="empty-icon">⏳</div>Loading…</div>';
+  document.getElementById('bm-invoice-row').innerHTML = '';
+  document.getElementById('billingModal').classList.add('open');
+  renderPlatformInvoiceRow(c);
+
+  const {data,error} = await SB.from('mpesa_payments').select('*').eq('client_id',clientId).order('created_at',{ascending:false});
+  if(error){
+    billingPayments = [];
+    document.getElementById('bm-history').innerHTML = `<div class="empty" style="padding:1rem">No payment records yet (or the <code>mpesa_payments</code> table hasn't been created — see supabase/migrations/mpesa_billing.sql).</div>`;
+    return;
+  }
+  renderBillingHistory(data||[]);
+}
+
+function renderBillingSummary(c){
+  const enableRow = document.getElementById('bm-enable-row');
+  const summaryEl = document.getElementById('bm-summary');
+
+  if(!c.billing_enabled){
+    enableRow.innerHTML = `
+      <div style="background:#f5f2eb;border-radius:var(--radius-sm);padding:.8rem 1rem;font-size:.82rem;display:flex;justify-content:space-between;align-items:center;gap:1rem">
+        <span>M-Pesa billing is <strong>not enabled</strong> for this tenant — existing tenants stay this way by default until you opt them in. Enabling starts a fresh 30-day cycle from today.</span>
+        <button class="btn btn-green btn-sm" onclick="toggleBillingEnabled('${c.id}',true)" style="white-space:nowrap">Enable Billing</button>
+      </div>`;
+    summaryEl.innerHTML = '';
+    return;
+  }
+
+  enableRow.innerHTML = `
+    <div style="display:flex;justify-content:flex-end">
+      <button class="btn btn-outline btn-sm" onclick="toggleBillingEnabled('${c.id}',false)">Disable Billing</button>
+    </div>`;
+
+  const periodAmount = periodAmountFor(c.id);
+  const status = billingStatusLine(c);
+  const planOpt = p => `<option value="${p}"${String(c.event||'').toLowerCase()===p?' selected':''}>${p.charAt(0).toUpperCase()+p.slice(1)} — ${fmt(PLAN_PRICES[p])}</option>`;
+  summaryEl.innerHTML = `
+    <div>
+      <div class="stat-label" style="margin-bottom:.2rem">Amount Due / 30 Days</div>
+      <div style="font-weight:700">${fmt(periodAmount)}</div>
+      <select class="form-input" style="margin-top:.3rem;padding:.25rem .4rem;font-size:.75rem" onchange="changeClientPlan('${c.id}',this.value)">
+        ${planOpt('basic')}${planOpt('standard')}${planOpt('premium')}
+      </select>
+    </div>
+    <div><div class="stat-label" style="margin-bottom:.2rem">Paid Until</div><div style="font-weight:700">${fdate(c.paid_until)}</div></div>
+    <div><div class="stat-label" style="margin-bottom:.2rem">Status</div><div style="font-weight:700;color:var(--${status.cls})">${status.text}</div></div>
+    <div><div class="stat-label" style="margin-bottom:.2rem">Last Payment</div><div style="font-weight:700">${c.last_payment_at?fdate(c.last_payment_at):'—'}</div></div>
+    ${c.auto_suspended?`<div style="grid-column:1/-1;color:var(--red);font-size:.8rem">⚠ Auto-suspended — ${esc(c.suspended_reason||'payment overdue')}</div>`:''}
+  `;
+}
+
+// The plan drives the amount charged, so it is editable right where that
+// amount is shown. Changing it affects the *next* renewal only — payments
+// already recorded keep the period_amount they were taken at.
+async function changeClientPlan(id,plan){
+  const {data,error} = await SB.from('clients').update({event:plan}).eq('id',id).select('id');
+  if(error){toast('Could not change plan: '+error.message,'error');return;}
+  if(!data||!data.length){toast('Could not change plan — client not found','error');return;}
+  toast(`Plan set to ${plan} — ${fmt(planPriceFor(plan))} / 30 days ✓`);
+  await init();
+  openBillingModal(id);
+}
+
+async function toggleBillingEnabled(id,enable){
+  let payload;
+  if(enable){
+    payload = { billing_enabled:true, paid_until:new Date(Date.now()+30*24*60*60*1000).toISOString(), reminder_stage:'none' };
+  } else {
+    // Disabling billing also lifts any auto-suspension — the tenant
+    // shouldn't stay locked out by enforcement that's now switched off.
+    const c = allClients.find(x=>x.id===id);
+    payload = { billing_enabled:false, auto_suspended:false, suspended_reason:null };
+    if(c && c.auto_suspended) payload.status = 'active';
+  }
+
+  const {error} = await SB.from('clients').update(payload).eq('id',id);
+  if(error){toast('Failed to update billing setting','error');return;}
+  toast(enable?'M-Pesa billing enabled — 30-day cycle started ✓':'M-Pesa billing disabled ✓');
+  await init();
+  openBillingModal(id);
+}
+
+function renderBillingHistory(payments){
+  billingPayments = payments;
+  if(!payments.length){
+    document.getElementById('bm-history').innerHTML = '<div class="empty" style="padding:1rem"><div class="empty-icon">💳</div>No payments recorded yet</div>';
+    return;
+  }
+  document.getElementById('bm-history').innerHTML = `<table style="width:100%">
+    <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Status</th><th>Receipt</th><th></th></tr></thead>
+    <tbody>${payments.map(p=>`<tr id="pay-row-${p.id}">
+      <td style="font-size:.78rem;color:var(--muted)">${fdate(p.completed_at||p.created_at)}</td>
+      <td style="font-weight:600">${fmt(p.amount)}${p.months_covered>1?` <span style="color:var(--muted);font-size:.7rem">(${p.months_covered} mo)</span>`:''}</td>
+      <td style="font-size:.78rem;text-transform:capitalize">${esc(p.method||'mpesa')}</td>
+      <td>${invoiceBadge(p.status==='completed'?'paid':p.status==='pending'?'pending':'cancelled')}</td>
+      <td style="font-size:.75rem;color:var(--muted)">${esc(p.mpesa_receipt||'—')}</td>
+      <td style="white-space:nowrap;text-align:right">
+        <a href="#" onclick="editPaymentRow('${p.id}');return false" style="font-size:.72rem;color:var(--muted);text-decoration:underline">edit</a>
+        <a href="#" onclick="deletePayment('${p.id}');return false" style="font-size:.72rem;color:var(--red);text-decoration:underline;margin-left:.5rem">delete</a>
+      </td>
+    </tr>`).join('')}</tbody></table>`;
+}
+
+// ── EDIT / DELETE A RECORDED PAYMENT ──────────────────────────
+// A payment is not just a ledger line: recordOfflinePayment() moved the
+// tenant's paid_until forward by months_covered × 30 days. Correcting or
+// removing one has to move the billing clock back by the same span, or the
+// tenant keeps service they no longer paid for. Payments that never counted
+// (pending / failed / cancelled) contributed nothing and shift nothing.
+const DAY_MS = 24*60*60*1000;
+const monthsOf = p => Number(p.months_covered) || 1;
+const monthsForAmount = (amount,periodAmount) => periodAmount>0 ? Math.max(1,Math.round(amount/periodAmount)) : 1;
+
+async function syncBillingAfterPaymentChange(clientId,deltaMonths){
+  const c = allClients.find(x=>x.id===clientId);
+  if(!c) return null;
+  const patch = {};
+  if(deltaMonths && c.paid_until){
+    patch.paid_until = new Date(new Date(c.paid_until).getTime() + deltaMonths*30*DAY_MS).toISOString();
+  }
+  // last_payment_at is derived, so re-read it from whatever still counts
+  // rather than trying to patch it in place.
+  const {data:remaining} = await SB.from('mpesa_payments')
+    .select('completed_at,created_at').eq('client_id',clientId).eq('status','completed');
+  const stamps = (remaining||[]).map(p=>p.completed_at||p.created_at).filter(Boolean).sort();
+  patch.last_payment_at = stamps.length ? stamps[stamps.length-1] : null;
+  const {error} = await SB.from('clients').update(patch).eq('id',clientId);
+  return error;
+}
+
+function editPaymentRow(id){
+  const p = billingPayments.find(x=>x.id===id);
+  const tr = document.getElementById('pay-row-'+id);
+  if(!p||!tr) return;
+  const opt=(v,l,cur)=>`<option value="${v}"${cur===v?' selected':''}>${l}</option>`;
+  tr.innerHTML = `<td colspan="6" style="background:#f7f5f0">
+    <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;padding:.45rem .2rem">
+      <input class="form-input" id="pe-amount-${id}" type="number" min="1" step="1" value="${Number(p.amount)||0}" style="width:120px;padding:.35rem .5rem;font-size:.8rem" placeholder="Amount"/>
+      <select class="form-input" id="pe-method-${id}" style="width:150px;padding:.35rem .5rem;font-size:.8rem">
+        ${opt('mpesa','M-Pesa',p.method)}${opt('manual','Manual — Cash',p.method)}${opt('manual-bank','Manual — Bank',p.method)}${opt('manual-other','Manual — Other',p.method)}
+      </select>
+      <select class="form-input" id="pe-status-${id}" style="width:130px;padding:.35rem .5rem;font-size:.8rem">
+        ${opt('completed','Completed',p.status)}${opt('pending','Pending',p.status)}${opt('failed','Failed',p.status)}${opt('cancelled','Cancelled',p.status)}
+      </select>
+      <input class="form-input" id="pe-receipt-${id}" value="${esc(p.mpesa_receipt||'')}" style="width:140px;padding:.35rem .5rem;font-size:.8rem" placeholder="Receipt no."/>
+      <button class="btn btn-green btn-sm" onclick="savePaymentEdit('${id}')">Save</button>
+      <button class="btn btn-outline btn-sm" onclick="renderBillingHistory(billingPayments)">Cancel</button>
+    </div>
+    <div style="font-size:.72rem;color:var(--muted);padding:0 .2rem .4rem">Changing the amount or status re-dates this tenant's billing period by the difference.</div>
+  </td>`;
+}
+
+async function savePaymentEdit(id){
+  const p = billingPayments.find(x=>x.id===id);
+  if(!p) return;
+  const amount  = Number(document.getElementById('pe-amount-'+id).value);
+  const method  = document.getElementById('pe-method-'+id).value;
+  const status  = document.getElementById('pe-status-'+id).value;
+  const receipt = document.getElementById('pe-receipt-'+id).value.trim();
+  if(!amount || amount<=0){toast('Enter a valid amount','error');return;}
+
+  // period_amount is the tenant's 30-day due as it stood when the payment was
+  // taken — reusing it keeps the recalculation faithful to that moment even if
+  // their module subscriptions have changed since.
+  const periodAmount = Number(p.period_amount) || periodAmountFor(p.client_id);
+  const oldMonths = p.status==='completed' ? monthsOf(p) : 0;
+  const newMonths = status==='completed' ? monthsForAmount(amount,periodAmount) : 0;
+
+  const {error} = await SB.from('mpesa_payments').update({
+    amount, method, status,
+    mpesa_receipt: receipt||null,
+    months_covered: status==='completed' ? newMonths : p.months_covered,
+    completed_at: status==='completed' ? (p.completed_at||new Date().toISOString()) : null,
+  }).eq('id',id);
+  if(error){toast('Could not update payment: '+error.message,'error');return;}
+
+  const cliErr = await syncBillingAfterPaymentChange(p.client_id, newMonths-oldMonths);
+  toast(cliErr ? 'Payment updated, but the billing period could not be adjusted' : 'Payment updated ✓', cliErr?'error':'success');
+  await init();
+  openBillingModal(p.client_id);
+}
+
+// Shows whether this tenant's current billing period has already been invoiced
+// under the platform account, and offers to raise it if not. The nightly
+// billing check raises the same invoice when it sends the renewal reminder, so
+// this button is for issuing one ahead of that.
+async function renderPlatformInvoiceRow(c){
+  const el = document.getElementById('bm-invoice-row');
+  if(!el) return;
+  const platform = platformAccount();
+  const box = inner => el.innerHTML =
+    `<div style="background:#f5f2eb;border-radius:var(--radius-sm);padding:.8rem 1rem;font-size:.82rem;display:flex;justify-content:space-between;align-items:center;gap:1rem">${inner}</div>`;
+
+  if(c.is_platform_account){ el.innerHTML=''; return; }
+  if(!platform){
+    box(`<span>No platform account is set, so subscription invoices cannot be raised. Mark your own business as 🏠 Platform on the Clients table using the <strong>change</strong> link.</span>`);
+    return;
+  }
+  if(!c.paid_until){
+    box(`<span>Subscription invoices are raised under <strong>${esc(platform.name)}</strong> once this tenant has a billing period. Enable billing to start one.</span>`);
+    return;
+  }
+
+  try{
+    const existing = await findPlatformInvoice(platform.id,c.id,c.paid_until);
+    if(existing){
+      box(`<span>Invoiced for this period as <strong>${esc(existing.id)}</strong> under ${esc(platform.name)} — it is in that account's Invoices list.</span>`);
+    } else {
+      box(`<span>No invoice raised yet for the period ending ${fdate(c.paid_until)}. It will be raised automatically with the renewal reminder, or issue it now.</span>
+           <button class="btn btn-outline btn-sm" id="bm-invoice-btn" onclick="generateInvoiceForBillingClient()" style="white-space:nowrap">🧾 Generate Invoice</button>`);
+    }
+  }catch(e){
+    box(`<span>Could not check for an existing invoice: ${esc(e.message)}</span>`);
+  }
+}
+
+// ── PLATFORM BILLING INVOICES ─────────────────────────────────
+// A tenant's subscription invoice is a real invoice of the platform's own shop
+// account (the client flagged is_platform_account): same `invoices` table, same
+// numbering sequence, same branding, and it shows up in that shop's Invoices
+// list in the POS like any other document.
+//
+// This mirrors supabase/functions/_shared/platformInvoice.ts, which does the
+// same job from the nightly billing check. Both write the same shape and key
+// off the same tenant+period pair, so whichever runs first wins and the other
+// finds the existing invoice. Change one, change the other.
+
+const platformAccount = () => allClients.find(c=>c.is_platform_account) || null;
+
+function deriveInitials(name){
+  const initials = String(name||'').trim().split(/\s+/).filter(Boolean)
+    .map(w=>w.replace(/[^a-zA-Z0-9]/g,'').charAt(0)).filter(Boolean)
+    .join('').toUpperCase().slice(0,4);
+  return initials || 'INV';
+}
+
+async function nextPlatformInvoiceNumber(shopId,shopName){
+  const {data,error} = await SB.from('invoices').select('id,data').eq('shop_id',shopId);
+  if(error) throw error;
+  let maxN = 300; // first invoice is <PREFIX>-301
+  for(const row of data||[]){
+    if(row?.data?.type==='quotation') continue;
+    const m = String(row.id||'').match(/-(\d+)$/);
+    if(m){ const n=parseInt(m[1],10); if(n>maxN) maxN=n; }
+  }
+  const {data:st} = await SB.from('pos_shop_settings').select('settings').eq('shop_id',shopId).maybeSingle();
+  const explicit = String(st?.settings?.idPrefix||'').trim();
+  const prefix = explicit ? explicit.toUpperCase().slice(0,6) : deriveInitials(shopName);
+  return `${prefix}-${String(maxN+1).padStart(3,'0')}`;
+}
+
+async function findPlatformInvoice(shopId,tenantId,periodEnd){
+  const {data,error} = await SB.from('invoices').select('id,data')
+    .eq('shop_id',shopId).eq('data->>billingTenantId',tenantId)
+    .eq('data->>billingPeriodEnd',periodEnd).limit(1).maybeSingle();
+  if(error) throw error;
+  return data||null;
+}
+
+// The tenant must exist as a customer of the platform shop so the invoice links
+// to a real client record. Keyed on the tenant's own id in referred_by, so
+// renaming a tenant never produces a second customer record for them.
+async function ensurePlatformClient(shopId,tenant){
+  const {data:existing} = await SB.from('clients').select('id')
+    .eq('shop_id',shopId).eq('referred_by',tenant.id).limit(1).maybeSingle();
+  if(existing) return existing.id;
+
+  if(tenant.email){
+    const {data:byEmail} = await SB.from('clients').select('id')
+      .eq('shop_id',shopId).eq('email',tenant.email).limit(1).maybeSingle();
+    if(byEmail){
+      await SB.from('clients').update({referred_by:tenant.id}).eq('id',byEmail.id);
+      return byEmail.id;
+    }
+  }
+
+  const id = Math.random().toString(36).slice(2,8).toUpperCase();
+  const {error} = await SB.from('clients').insert({
+    id, shop_id:shopId, name:tenant.name, email:tenant.email||'', phone:tenant.phone||'',
+    event:'', notes:'EdosPoa platform tenant', referred_by:tenant.id,
+    created_at:new Date().toISOString(),
+  });
+  if(error) throw error;
+  return id;
+}
+
+const invDate = d => d.toLocaleDateString('en-KE',{day:'2-digit',month:'short',year:'numeric'});
+const invTime = d => d.toLocaleTimeString('en-KE',{hour:'2-digit',minute:'2-digit'});
+
+async function generateTenantInvoice(tenantId,periodEnd){
+  const platform = platformAccount();
+  if(!platform) throw new Error('No platform account is set — open a client and use "change" to mark it 🏠 Platform');
+  const tenant = allClients.find(c=>c.id===tenantId);
+  if(!tenant) throw new Error('Tenant not found');
+  if(platform.id===tenant.id) throw new Error('The platform account does not invoice itself');
+  if(!periodEnd) throw new Error('This tenant has no billing period yet — enable billing first');
+
+  const existing = await findPlatformInvoice(platform.id,tenant.id,periodEnd);
+  if(existing) return {invoice:existing.data,created:false};
+
+  const amount = planPriceFor(tenant.event);
+  if(amount<=0) throw new Error('This tenant is on a zero-price plan — nothing to invoice');
+
+  const clientId  = await ensurePlatformClient(platform.id,tenant);
+  const invoiceId = await nextPlatformInvoiceNumber(platform.id,platform.name);
+
+  const issued = new Date();
+  const endD   = new Date(periodEnd);
+  const startD = new Date(endD.getTime()-30*24*60*60*1000);
+  const planName = String(tenant.event||'basic').replace(/^./,c=>c.toUpperCase());
+
+  // VAT is left at zero — the platform shop's VAT rate lives in its own POS
+  // settings. Edit the invoice in the POS if the subscription should carry VAT.
+  const invoice = {
+    id:invoiceId, type:'invoice', clientId,
+    clientName:tenant.name, clientPhone:tenant.phone||'', clientEmail:tenant.email||'', clientWhatsApp:'',
+    items:[{ id:`sub-${tenant.id}-${endD.getTime()}`, name:`EdosPoa ${planName} subscription`,
+             desc:`${invDate(startD)} — ${invDate(endD)}`, qty:1, price:amount, dept:null }],
+    subtotal:amount, discountPct:0, discountAmt:0, vatRate:0, vatAmt:0, total:amount,
+    payMethod:'credit', status:'Unpaid',
+    date:invDate(issued), time:invTime(issued), eventDate:invDate(endD),
+    cashier:'EdosPoa Billing', dept:[], sendEmail:true, sendWhatsApp:false,
+    billingTenantId:tenant.id, billingPeriodStart:startD.toISOString(), billingPeriodEnd:periodEnd,
+  };
+
+  // Same columns dbInsertInvoice() writes from the POS — the live `invoices`
+  // table is (id, shop_id, data, created_at); document type lives in data.type.
+  const {error} = await SB.from('invoices').insert({
+    id:invoiceId, shop_id:platform.id, data:invoice, created_at:issued.toISOString(),
+  });
+  if(error) throw error;
+  return {invoice,created:true};
+}
+
+async function generateInvoiceForBillingClient(){
+  const c = allClients.find(x=>x.id===billingClientId);
+  if(!c) return;
+  const btn = document.getElementById('bm-invoice-btn');
+  if(btn){ btn.disabled=true; btn.textContent='Generating…'; }
+  try{
+    const {invoice,created} = await generateTenantInvoice(c.id,c.paid_until);
+    const platform = platformAccount();
+    toast(created
+      ? `Invoice ${invoice.id} raised under ${platform.name} ✓`
+      : `Invoice ${invoice.id} already exists for this period`, created?'success':'error');
+    await openBillingModal(c.id);
+  }catch(e){
+    toast(e.message,'error');
+    console.error('generateTenantInvoice',e);
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent='🧾 Generate Invoice'; }
+  }
+}
+
+async function deletePayment(id){
+  const p = billingPayments.find(x=>x.id===id);
+  if(!p) return;
+  const counted = p.status==='completed';
+  const when = fdate(p.completed_at||p.created_at);
+  const ok = await confirm2('🗑️','Delete Payment?',
+    `${fmt(p.amount)} recorded ${when} will be removed from this tenant's ledger. `+
+    (counted
+      ? `Their billing period rolls back by ${monthsOf(p)*30} days.`
+      : `It never counted towards the billing period, so nothing else changes.`),
+    'Delete','btn-danger');
+  if(!ok) return;
+  const {data,error} = await SB.from('mpesa_payments').delete().eq('id',id).select('id');
+  if(error){toast('Delete failed: '+error.message,'error');return;}
+  if(!data||!data.length){toast('Delete failed — payment not found','error');openBillingModal(p.client_id);return;}
+  const cliErr = await syncBillingAfterPaymentChange(p.client_id, counted?-monthsOf(p):0);
+  toast(cliErr ? 'Payment deleted, but the billing period could not be adjusted' : 'Payment deleted ✓', cliErr?'error':'success');
+  await init();
+  openBillingModal(p.client_id);
+}
+
+async function recordOfflinePayment(){
+  const amount = Number(document.getElementById('bm-amount').value);
+  const method = document.getElementById('bm-method').value;
+  const statusEl = document.getElementById('bm-status');
+  if(!amount || amount<=0){statusEl.textContent='Enter a valid amount';statusEl.style.color='var(--red)';return;}
+
+  const c = allClients.find(x=>x.id===billingClientId);
+  if(!c) return;
+
+  const periodAmount = periodAmountFor(c.id);
+  const {monthsCovered,newPaidUntil} = computeNewPaidUntil(c.paid_until,periodAmount,amount);
+
+  const btn=document.getElementById('bm-record-btn');
+  btn.disabled=true;
+
+  const {error:payErr} = await SB.from('mpesa_payments').insert({
+    client_id:c.id, amount, method, status:'completed',
+    period_amount:periodAmount, months_covered:monthsCovered,
+    completed_at:new Date().toISOString()
+  });
+  if(payErr){statusEl.textContent='Failed to record payment';statusEl.style.color='var(--red)';btn.disabled=false;return;}
+
+  const {error:cliErr} = await SB.from('clients').update({
+    status:'active', auto_suspended:false, suspended_reason:null,
+    reminder_stage:'none', last_payment_at:new Date().toISOString(),
+    paid_until:newPaidUntil.toISOString()
+  }).eq('id',c.id);
+
+  btn.disabled=false;
+  if(cliErr){statusEl.textContent='Payment recorded, but failed to update billing period';statusEl.style.color='var(--amber)';return;}
+
+  toast(`Payment recorded — paid until ${fdate(newPaidUntil.toISOString())} ✓`);
+  document.getElementById('bm-amount').value='';
+  statusEl.textContent='';
+  await init();
+  openBillingModal(c.id);
+}
+
 async function deleteClient(id,name){
-  const ok=await confirm2('🗑️','Delete Client?',`"${name}" and all their data will be permanently removed.`,'Delete','btn-danger');
+  // Deleting a tenant row logs its whole shop out for good — the POS resolves
+  // an account by clients.id at login. Staff, invoices and customers live in
+  // other tables and survive the delete as orphans, so spell out what is about
+  // to be stranded rather than presenting this as a clean removal.
+  const [{count:staffCount},{count:invCount},{count:custCount}]=await Promise.all([
+    SB.from('pos_staff').select('id',{count:'exact',head:true}).eq('client_id',id),
+    SB.from('invoices').select('id',{count:'exact',head:true}).eq('shop_id',id),
+    SB.from('clients').select('id',{count:'exact',head:true}).eq('shop_id',id),
+  ]);
+  const attached=[
+    staffCount?`${staffCount} staff user${staffCount!==1?'s':''}`:'',
+    invCount?`${invCount} invoice${invCount!==1?'s':''}`:'',
+    custCount?`${custCount} customer record${custCount!==1?'s':''}`:'',
+  ].filter(Boolean);
+  const warn=attached.length
+    ? ` This shop still has ${attached.join(', ')} — that data is NOT deleted, but nobody will be able to log in and reach it again.`
+    : '';
+  const ok=await confirm2('🗑️','Delete Client?',`"${name}" will be permanently removed and its staff will lose access.${warn}`,'Delete','btn-danger');
   if(!ok)return;
   await SB.from('client_subscriptions').delete().eq('client_id',id);
-  const {error}=await SB.from('clients').delete().eq('id',id);
+  const {data,error}=await SB.from('clients').delete().eq('id',id).select('id');
   if(error){toast('Delete failed: '+error.message,'error');return;}
+  if(!data||!data.length){toast('Delete failed — client not found','error');await init();return;}
   toast(`"${name}" removed`);
   await init();
 }
 
 // ── INVOICES TABLE ────────────────────────────────────────────
+// Subscription invoices are real invoices of the platform's own shop, so they
+// are read back from `invoices` (not the old pos_invoices table) and identified
+// by the billingTenantId stamped into them at generation.
+let platformInvoices = [];
+
+async function loadPlatformInvoices(){
+  const platform = platformAccount();
+  if(!platform){ platformInvoices=[]; return; }
+  const {data,error} = await SB.from('invoices')
+    .select('id,data,created_at')
+    .eq('shop_id',platform.id)
+    .not('data->>billingTenantId','is',null)
+    .order('created_at',{ascending:false});
+  if(error){ console.error('loadPlatformInvoices',error); platformInvoices=[]; return; }
+  platformInvoices = (data||[]).map(r=>({
+    number:r.id,
+    tenantId:r.data?.billingTenantId||'',
+    tenantName:r.data?.clientName||'—',
+    amount:Number(r.data?.total||0),
+    // A subscription invoice is settled when the tenant's payment moved their
+    // period past this invoice's period end — the ledger is the source of
+    // truth, not a status field somebody has to remember to update.
+    periodEnd:r.data?.billingPeriodEnd||null,
+    issued:r.created_at,
+    items:r.data?.items||[],
+  }));
+}
+
+function platformInvoiceStatus(inv){
+  const c = allClients.find(x=>x.id===inv.tenantId);
+  if(c && c.paid_until && inv.periodEnd && new Date(c.paid_until) >= new Date(inv.periodEnd)) return 'paid';
+  if(inv.periodEnd && new Date(inv.periodEnd) < new Date()) return 'overdue';
+  return 'pending';
+}
+
 async function renderInvoicesTable(){
-  const {data,error}=await SB.from('pos_invoices').select('*,clients(name)').order('created_at',{ascending:false});
-  if(error||!data?.length){document.getElementById('invoicesTableBody').innerHTML=`<tr><td colspan="7"><div class="empty"><div class="empty-icon">🧾</div>${error?'Error loading':'No invoices yet'}</div></td></tr>`;return;}
-  document.getElementById('invoicesTableBody').innerHTML=data.map(i=>`
+  await loadPlatformInvoices();
+  const body = document.getElementById('invoicesTableBody');
+  const platform = platformAccount();
+  if(!platform){
+    body.innerHTML=`<tr><td colspan="7"><div class="empty"><div class="empty-icon">🏠</div>No platform account is set — mark your own business as 🏠 Platform on the Clients table to start issuing subscription invoices.</div></td></tr>`;
+    renderInvoiceSummary([]);
+    return;
+  }
+  if(!platformInvoices.length){
+    body.innerHTML=`<tr><td colspan="7"><div class="empty"><div class="empty-icon">🧾</div>No subscription invoices yet — they are raised under ${esc(platform.name)} with each renewal reminder, or on demand from a tenant's Billing modal.</div></td></tr>`;
+    renderInvoiceSummary([]);
+    return;
+  }
+  const rows = platformInvoices.map(i=>({...i,status:platformInvoiceStatus(i)}));
+  renderInvoiceSummary(rows);
+  body.innerHTML = rows.map(i=>`
     <tr>
-      <td style="font-weight:600;font-size:.82rem;color:var(--green)">${esc(i.invoice_number||'—')}</td>
-      <td><div class="client-name-cell" style="font-size:.85rem">${esc(i.clients?.name||'—')}</div></td>
-      <td><span class="badge badge-blue">${esc(i.invoice_type||'—')}</span></td>
+      <td style="font-weight:600;font-size:.82rem;color:var(--green)">${esc(i.number)}</td>
+      <td><div class="client-name-cell" style="font-size:.85rem">${esc(i.tenantName)}</div></td>
+      <td><span class="badge badge-blue">subscription</span></td>
       <td style="font-weight:700;font-family:'Syne',sans-serif">${fmt(i.amount)}</td>
       <td>${invoiceBadge(i.status)}</td>
-      <td style="color:var(--muted);font-size:.82rem">${fdate(i.due_date)}</td>
-      <td style="color:var(--muted);font-size:.8rem;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.notes||'—')}</td>
+      <td style="color:var(--muted);font-size:.82rem">${i.periodEnd?fdate(i.periodEnd):'—'}</td>
+      <td style="color:var(--muted);font-size:.8rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.items[0]?.desc||'—')}</td>
     </tr>`).join('');
 }
 
@@ -989,13 +1712,11 @@ async function renderInvoicesTable(){
 
 function renderModStats(){
   const activeSubs=allSubs.filter(s=>s.status==='active');
-  const mrr=activeSubs.reduce((sum,s)=>{
-    const m=allModules.find(x=>x.id===s.module_id);
-    return sum+Number(s.custom_fee||m?.monthly_fee||0);
-  },0);
   document.getElementById('mod-total').textContent = allModules.length;
   document.getElementById('mod-subs').textContent  = activeSubs.length;
-  document.getElementById('mod-mrr').textContent   = fmtK(mrr);
+  // Same plan-based figure as the dashboard — module fees are catalogue
+  // pricing, not what anyone is charged, so they must not be summed as revenue.
+  document.getElementById('mod-mrr').textContent   = fmtK(platformMRR());
 }
 
 function setTierFilter(tier,btn){
@@ -1078,10 +1799,9 @@ function renderCSP(){
 
   const client=allClients.find(c=>c.id===activeClientId);
   const clientSubs=allSubs.filter(s=>s.client_id===activeClientId);
-  const mrr=clientSubs.filter(s=>['active','trial'].includes(s.status)).reduce((sum,s)=>{
-    const m=allModules.find(x=>x.id===s.module_id);
-    return sum+Number(s.custom_fee||m?.monthly_fee||0);
-  },0);
+  // What this tenant is billed comes from their plan, not from the modules
+  // assigned below — assigning a module grants access, it does not add a charge.
+  const mrr=periodAmountFor(activeClientId);
 
   const chips=clientSubs.map(s=>{
     const m=allModules.find(x=>x.id===s.module_id);
@@ -1284,7 +2004,7 @@ async function seedMejazonClient(){
   // 1. Create or update the client
   const {data:existingClient}=await SB.from('clients').select('id').eq('id',MEJASON_CLIENT.id).single();
   if(existingClient){
-    await SB.from('clients').update({status:'active',name:MEJASON_CLIENT.name}).eq('id',MEJASON_CLIENT.id);
+    await SB.from('clients').update({status:'active',name:MEJASON_CLIENT.name,is_platform_account:true}).eq('id',MEJASON_CLIENT.id);
     logSeed('Client exists — status set to active.');
   } else {
     const {error:ce}=await SB.from('clients').insert(MEJASON_CLIENT);
@@ -1322,10 +2042,12 @@ async function seedMejazonClient(){
   logSeed(`\n✓ Assigned all ${rows.length} modules to Mejason Media Production:`);
   mods.forEach(m=>logSeed(`  ✓ ${m.name} [${m.tier}] @ ${fmt(m.monthly_fee)}/mo`));
 
-  const totalMRR=mods.reduce((sum,m)=>sum+Number(m.monthly_fee),0);
-  logSeed(`\nMejason total MRR: ${fmt(totalMRR)}/month`);
+  // Module fees are catalogue pricing only — billing follows the tenant's plan,
+  // so this total is not what anyone gets charged.
+  const catalogueValue=mods.reduce((sum,m)=>sum+Number(m.monthly_fee),0);
+  logSeed(`\nCatalogue value of assigned modules: ${fmt(catalogueValue)} (billing follows the tenant's plan, not this figure)`);
 
-  toast(`Mejason fully seeded — ${rows.length} modules, MRR ${fmt(totalMRR)}`);
+  toast(`Mejason fully seeded — ${rows.length} modules assigned`);
   await init();
 }
 
@@ -1595,8 +2317,143 @@ document.addEventListener('keydown',e=>{
   }
 });
 
+// ── ACCESS CONTROL ────────────────────────────────────────────
+// Only owner/admin staff of the platform account may open this page.
+//
+// Be clear about what this is: a gate in the UI, not a security boundary. The
+// anon key ships in this file and RLS on these tables is still `using (true)`,
+// so anyone holding the key can read and write the same rows directly. Making
+// this real means tightening the RLS policies — see the note in
+// supabase/migrations/clients_tenant_customer_split.sql. Until then this stops
+// casual access, nothing more.
+
+const ADMIN_SESSION_KEY = 'edospoa_admin_session';
+
+async function platformAccountId(){
+  const {data} = await SB.from('clients').select('id,name')
+    .is('shop_id',null).eq('is_platform_account',true).limit(1).maybeSingle();
+  return data || null;
+}
+
+// Re-checks a stored/handed-over session against the database rather than
+// trusting what is in storage: a forged entry naming a non-owner fails here.
+async function verifyStaffSession(sess){
+  if(!sess || !sess.staffId) return null;
+  const platform = await platformAccountId();
+  if(!platform) return null;
+  const {data:staff} = await SB.from('pos_staff')
+    .select('id,full_name,role,client_id,is_active').eq('id',sess.staffId).maybeSingle();
+  if(!staff) return null;
+  if(staff.is_active===false) return null;
+  if(staff.client_id!==platform.id) return null;
+  if(!['owner','admin'].includes(staff.role)) return null;
+  return {staffId:staff.id, name:staff.full_name, role:staff.role, platformName:platform.name};
+}
+
+function openAdminApp(session){
+  adminSession = session;
+  document.getElementById('adminGate').style.display='none';
+  const who = document.getElementById('adminWho');
+  if(who) who.textContent = `${session.name} · ${session.role}`;
+
+  // Embedded in the POS: its sidebar carries these sections as children of
+  // Platform Admin, so this page drops its own sidebar and page title rather
+  // than showing a second set of navigation inside the first.
+  if(window.parent!==window){
+    const sb=document.querySelector('.sidebar');
+    if(sb) sb.style.display='none';
+    const pt=document.getElementById('pageTitle');
+    if(pt) pt.style.display='none';
+    window.parent.postMessage({type:'edospoa-admin-ready'},'*');
+  }
+  init();
+}
+
+// Section changes driven by the host POS sidebar.
+window.addEventListener('message',e=>{
+  if(!e.data || e.data.type!=='edospoa-admin-navigate') return;
+  if(!adminSession) return;                       // never navigate a locked page
+  if(!document.getElementById('section-'+e.data.section)) return;
+  showSection(e.data.section);
+});
+
+async function adminLogin(){
+  const errEl=document.getElementById('gate-err');
+  const btn=document.getElementById('gate-btn');
+  const username=document.getElementById('gate-user').value.trim();
+  const password=document.getElementById('gate-pass').value;
+  errEl.textContent='';
+  if(!username||!password){errEl.textContent='Enter your username and password.';return;}
+  btn.disabled=true;btn.textContent='Signing in…';
+  try{
+    const platform=await platformAccountId();
+    if(!platform){
+      errEl.textContent='No platform account is configured. Flag your own business as a platform account first.';
+      return;
+    }
+    const {data:matches,error}=await SB.from('pos_staff').select('*')
+      .eq('username',username).eq('client_id',platform.id);
+    if(error) throw error;
+    const staff=(matches||[]).find(s=>s.password_hash===password);
+    if(!staff){errEl.textContent='Incorrect username or password.';return;}
+    if(staff.is_active===false){errEl.textContent='This account is disabled.';return;}
+    if(!['owner','admin'].includes(staff.role)){
+      errEl.textContent='Only the platform owner or an admin can open this page.';return;
+    }
+    const session={staffId:staff.id,name:staff.full_name,role:staff.role,platformName:platform.name};
+    sessionStorage.setItem(ADMIN_SESSION_KEY,JSON.stringify(session));
+    openAdminApp(session);
+  }catch(e){
+    errEl.textContent=e.message||'Could not reach the server.';
+  }finally{
+    btn.disabled=false;btn.textContent='Sign In';
+  }
+}
+
+function adminLogout(){
+  sessionStorage.removeItem(ADMIN_SESSION_KEY);
+  location.reload();
+}
+
+// When embedded in the POS (Platform Admin page), ask the host for the session
+// it already authenticated. Only the staff id comes across — verifyStaffSession
+// re-checks role, platform account and active status against the database, so a
+// handoff naming anyone else is rejected here.
+function requestHostSession(timeoutMs=1500){
+  if(window.parent===window) return Promise.resolve(null);
+  return new Promise(resolve=>{
+    let done=false;
+    const finish=v=>{ if(!done){ done=true; window.removeEventListener('message',onMsg); resolve(v); } };
+    const onMsg=e=>{
+      if(e.data && e.data.type==='edospoa-admin-session' && e.data.staffId) finish({staffId:e.data.staffId});
+    };
+    window.addEventListener('message',onMsg);
+    window.parent.postMessage({type:'edospoa-admin-session-request'},'*');
+    setTimeout(()=>finish(null),timeoutMs);
+  });
+}
+
 // ── INIT ──────────────────────────────────────────────────────
-init();
+(async function bootAdmin(){
+  const embedded = window.parent!==window;
+  if(embedded){
+    const btn=document.getElementById('adminLogoutBtn');
+    if(btn) btn.style.display='none';   // sign out belongs to the host POS
+  }
+
+  const handoff = await verifyStaffSession(await requestHostSession());
+  if(handoff){ openAdminApp(handoff); return; }
+
+  let stored=null;
+  try{ stored=JSON.parse(sessionStorage.getItem(ADMIN_SESSION_KEY)||'null'); }catch(e){}
+  const session=await verifyStaffSession(stored);
+  if(session){ openAdminApp(session); return; }
+
+  sessionStorage.removeItem(ADMIN_SESSION_KEY);
+  const sub=document.getElementById('gate-sub');
+  if(embedded && sub) sub.textContent='Sign in to manage EdosPoa tenants';
+  document.getElementById('gate-user').focus();
+})();
 </script>
 </body>
 </html>
