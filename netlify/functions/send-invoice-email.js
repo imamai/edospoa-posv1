@@ -6,7 +6,7 @@ const nodemailer = require('nodemailer');
 // Sender identity — see the note in send-billing-reminder.js. EMAIL_FROM is the
 // visible sender; EMAIL_USER is the account that authenticates to the mail
 // server, and the two differ unless the SMTP account is the address itself.
-const EMAIL_FROM = process.env.EMAIL_FROM || 'EDOS Centre <info@edoscentre.co.ke>';
+const EMAIL_FROM = process.env.EMAIL_FROM || 'EDOS Centre <billing@edoscentre.co.ke>';
 
 const transporter = nodemailer.createTransport(
   process.env.SMTP_HOST

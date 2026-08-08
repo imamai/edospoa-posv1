@@ -218,7 +218,7 @@ shows each run.
 ### Who the mail comes from
 
 Everything EdosPoa sends — billing reminders and invoice emails — goes out as
-**`info@edoscentre.co.ke`**, displayed as `EDOS Centre <info@edoscentre.co.ke>`.
+**`billing@edoscentre.co.ke`**, displayed as `EDOS Centre <billing@edoscentre.co.ke>`.
 That is the default in both Netlify functions; `EMAIL_FROM` overrides it.
 
 Two separate identities are involved and they are easy to confuse:
@@ -230,9 +230,9 @@ Two separate identities are involved and they are easy to confuse:
 | `EMAIL_PASS` | that mailbox's password (an app password, not the login one) |
 
 They are only the same address when the SMTP account *is*
-`info@edoscentre.co.ke`.
+`billing@edoscentre.co.ke`.
 
-**Do not send as `info@edoscentre.co.ke` through a personal Gmail account.**
+**Do not send as `billing@edoscentre.co.ke` through a personal Gmail account.**
 `edoscentre.co.ke`'s SPF record does not authorise Google to send on its behalf,
 so Gmail and Outlook will put those reminders in spam or reject them. Pick one:
 
@@ -243,9 +243,9 @@ so Gmail and Outlook will put those reminders in spam or reject them. Pick one:
    SMTP_HOST = mail.edoscentre.co.ke
    SMTP_PORT = 465
    SMTP_SECURE = true
-   EMAIL_USER = info@edoscentre.co.ke
+   EMAIL_USER = billing@edoscentre.co.ke
    EMAIL_PASS = <that mailbox's password>
-   EMAIL_FROM = EDOS Centre <info@edoscentre.co.ke>
+   EMAIL_FROM = EDOS Centre <billing@edoscentre.co.ke>
    ```
 
    Use `SMTP_PORT=587` with `SMTP_SECURE=false` if 465 is blocked (that is
@@ -253,7 +253,7 @@ so Gmail and Outlook will put those reminders in spam or reject them. Pick one:
    not to sending in the clear).
 
 2. **Google Workspace on the domain** — leave `SMTP_HOST` unset, set
-   `EMAIL_USER=info@edoscentre.co.ke` with a Google app password.
+   `EMAIL_USER=billing@edoscentre.co.ke` with a Google app password.
 
 3. **A Gmail account with the address added** under Settings → Accounts →
    "Send mail as", verified. Works, but delivery is weaker than options 1–2.
@@ -266,7 +266,7 @@ mail will still land in spam:
   line your cPanel host specifies. One SPF record only; merge, never duplicate.
 - **DKIM** — enable it in cPanel (Email Deliverability) or Workspace and add
   the `TXT` record it generates.
-- **DMARC** — `_dmarc` `TXT`, start at `v=DMARC1; p=none; rua=mailto:info@edoscentre.co.ke`
+- **DMARC** — `_dmarc` `TXT`, start at `v=DMARC1; p=none; rua=mailto:billing@edoscentre.co.ke`
   and tighten to `p=quarantine` once reports look clean.
 
 All of these are set **on Netlify** (Site configuration → Environment
