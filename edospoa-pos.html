@@ -28,7 +28,9 @@ body{background:var(--page-bg);color:var(--text);font-size:13px}
   .ep-brand-name{font-size:18px}
 }
 .ep-brand{display:flex;align-items:center;gap:10px;margin-bottom:6px}
-.ep-brand-logo{width:38px;height:38px;background:#00A550;border-radius:9px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.75rem;color:#fff;font-family:sans-serif;letter-spacing:-.5px}
+.ep-brand-logo{width:38px;height:38px;background:#00A550;border-radius:9px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.75rem;color:#fff;font-family:sans-serif;letter-spacing:-.5px;overflow:hidden;flex-shrink:0}
+.ep-brand-logo.has-logo{background:none}
+.ep-brand-logo img{width:100%;height:100%;object-fit:contain;display:block}
 .ep-brand-name{font-size:22px;font-weight:700;color:#fff;letter-spacing:-.5px}
 .ep-brand-name span{color:#00A550}
 .ep-subtitle{font-size:11px;color:#8a9e8a;margin-bottom:32px}
@@ -48,6 +50,11 @@ body{background:var(--page-bg);color:var(--text);font-size:13px}
 .topbar{height:52px;background:var(--topbar);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 18px;gap:10px;flex-shrink:0;box-shadow:0 1px 3px rgba(0,0,0,.06)}
 .topbar-brand{display:flex;align-items:center;gap:8px;min-width:180px}
 .tb-icon{width:30px;height:30px;background:var(--red);border-radius:7px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:15px}
+/* The EdosPoa mark in the app top bar. Styles that used to be inline live here
+   so the platform logo can swap the tile background off cleanly. */
+.tb-brand{background:#00A550;font-size:.6rem;font-weight:800;letter-spacing:-.5px;overflow:hidden;flex-shrink:0}
+.tb-brand.has-logo{background:none}
+.tb-brand img{width:100%;height:100%;object-fit:contain;display:block}
 .topbar-title{font-size:14px;font-weight:600;flex:1;padding-left:12px;color:var(--text)}
 .topbar-info{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:12px}
 .user-chip{display:flex;align-items:center;gap:6px;background:#f0f0ee;border:1px solid var(--border);border-radius:20px;padding:4px 10px;font-size:12px;color:var(--text)}
@@ -366,7 +373,7 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
 <div id="login-screen">
   <div class="ep-login-box">
     <div class="ep-brand">
-      <div class="ep-brand-logo">EP</div>
+      <div class="ep-brand-logo" data-brand-logo>EP</div>
       <div class="ep-brand-name">Edos<span>Poa</span></div>
     </div>
     <div class="ep-subtitle">Kenya's Smart POS — Staff Login</div>
@@ -415,7 +422,7 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
 <div id="app" style="position:relative">
   <div class="topbar">
     <div class="topbar-brand">
-      <div class="tb-icon" style="background:#00A550;font-size:.6rem;font-weight:800;letter-spacing:-.5px">EP</div>
+      <div class="tb-icon tb-brand" data-brand-logo>EP</div>
       <span style="font-size:12px;font-weight:700;color:var(--text)">Edos<span style="color:#00A550">Poa</span></span>
     </div>
     <div class="topbar-title" id="page-title">Dashboard</div>
@@ -909,6 +916,46 @@ const SUPABASE_CONFIG = {
 };
 
 
+// ── PLATFORM BRAND MARK ────────────────────────────────────
+// One symbol for the whole platform, uploaded once from the admin's Branding
+// page and stored on the platform account's settings row. Every tenant's POS
+// reads the same value, so changing it there changes it everywhere. Cached
+// locally so the login screen paints it immediately instead of flashing "EP".
+const BRAND_LOGO_CACHE = 'edospoa_brand_logo';
+
+// Marked with data-brand-logo rather than a class, because the two marks are
+// different sizes and styles: the login screen tile and the app top bar one.
+function applyBrandLogo(dataUrl) {
+  document.querySelectorAll('[data-brand-logo]').forEach(el => {
+    if (dataUrl) {
+      el.classList.add('has-logo');
+      el.innerHTML = `<img src="${dataUrl}" alt="EdosPoa"/>`;
+    } else {
+      el.classList.remove('has-logo');
+      el.textContent = 'EP';
+    }
+  });
+}
+
+async function loadPlatformBrandLogo() {
+  try {
+    const cached = localStorage.getItem(BRAND_LOGO_CACHE);
+    if (cached) applyBrandLogo(cached);
+  } catch(e) {}
+  if (!useSupabase) return;
+  try {
+    const { data: platform } = await sb.from('clients').select('id')
+      .is('shop_id', null).eq('is_platform_account', true).limit(1).maybeSingle();
+    if (!platform) return;
+    const { data } = await sb.from('pos_shop_settings').select('settings')
+      .eq('shop_id', platform.id).maybeSingle();
+    const logo = data?.settings?.platformLogo || '';
+    applyBrandLogo(logo);
+    if (logo) localStorage.setItem(BRAND_LOGO_CACHE, logo);
+    else localStorage.removeItem(BRAND_LOGO_CACHE);
+  } catch(e) { /* keep whatever is cached */ }
+}
+
 window.onload = () => {
   // Auto-connect to Supabase with hardcoded credentials
   if (SUPABASE_CONFIG.url && SUPABASE_CONFIG.key && !SUPABASE_CONFIG.url.includes('YOUR_')) {
@@ -916,6 +963,7 @@ window.onload = () => {
       initSupabase(SUPABASE_CONFIG.url, SUPABASE_CONFIG.key);
       localStorage.setItem('mmp_sb', JSON.stringify({ url: SUPABASE_CONFIG.url, key: SUPABASE_CONFIG.key }));
       showDbBadge(true);
+      loadPlatformBrandLogo();
     } catch(e) {
       // Supabase library failed to load (CDN blocked or offline)
       const errEl = document.getElementById('ep-err');
@@ -2262,6 +2310,7 @@ const PLATFORM_PAGES = [
   { key:'invoices',  icon:'ti-file-invoice', label:'Subscriptions' },
   { key:'modules',   icon:'ti-puzzle',       label:'Modules'     },
   { key:'staff',     icon:'ti-users',        label:'Staff Users' },
+  { key:'branding',  icon:'ti-palette',      label:'Branding'    },
   { key:'seed',      icon:'ti-seeding',      label:'Seed Data'   },
 ];
 
@@ -2292,6 +2341,16 @@ window.addEventListener('message', (e) => {
     if (!currentUser || !currentShopIsPlatform) return;
     if (!['owner', 'admin'].includes(currentUser.role)) return;
     e.source?.postMessage({ type: 'edospoa-admin-session', staffId: currentUser.id }, '*');
+    return;
+  }
+
+  // Platform logo changed in the embedded admin — reflect it here immediately.
+  if (e.data.type === 'edospoa-brand-logo') {
+    applyBrandLogo(e.data.logo || '');
+    try {
+      if (e.data.logo) localStorage.setItem(BRAND_LOGO_CACHE, e.data.logo);
+      else localStorage.removeItem(BRAND_LOGO_CACHE);
+    } catch(err) {}
     return;
   }
 

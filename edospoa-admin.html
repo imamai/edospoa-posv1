@@ -23,7 +23,11 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 
 .sidebar{width:220px;min-height:100vh;background:#f5f2eb;border-right:1px solid rgba(0,0,0,.08);display:flex;flex-direction:column;flex-shrink:0;position:sticky;top:0;height:100vh}
 .brand{padding:1.4rem 1.4rem 1rem;border-bottom:1px solid rgba(0,0,0,.08);display:flex;align-items:center;gap:.6rem}
-.brand-logo{width:32px;height:32px;background:var(--green);border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:800;font-size:.7rem;color:white}
+/* Brand mark. Shows the uploaded platform logo when one is set (Branding
+   section), otherwise falls back to the green "EP" tile. */
+.brand-logo{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;background:var(--green);font-family:'Syne',sans-serif;font-weight:800;font-size:.7rem;color:white}
+.brand-logo.has-logo{background:none}
+.brand-logo img{width:100%;height:100%;object-fit:contain;display:block}
 .brand-name{font-family:'Syne',sans-serif;font-weight:700;font-size:1.05rem;letter-spacing:-.02em}
 .brand-name span{color:var(--green)}
 nav{flex:1;padding:1rem .8rem;display:flex;flex-direction:column;gap:.2rem}
@@ -273,6 +277,7 @@ tr:hover td{background:#faf8f4}
     <button class="nav-item" onclick="showSection('invoices',this)"><span class="icon">🧾</span><span>Invoices</span></button>
     <button class="nav-item" onclick="showSection('modules',this)"><span class="icon">🧩</span><span>Modules</span></button>
     <button class="nav-item" onclick="showSection('staff',this)"><span class="icon">👥</span><span>Staff Users</span></button>
+    <button class="nav-item" onclick="showSection('branding',this)"><span class="icon">🎨</span><span>Branding</span></button>
     <button class="nav-item" onclick="showSection('seed',this)"><span class="icon">🌱</span><span>Seed Data</span></button>
   </nav>
   <div class="sidebar-footer">
@@ -432,6 +437,36 @@ tr:hover td{background:#faf8f4}
     </div>
 
     <!-- SEED DATA -->
+    <!-- BRANDING -->
+    <div class="section" id="section-branding">
+      <div class="table-card">
+        <div class="table-header"><span class="table-title">🎨 Platform Branding</span></div>
+        <div style="padding:1.2rem">
+          <p style="font-size:.85rem;color:var(--muted);margin:0 0 1rem;max-width:46rem">
+            The EdosPoa symbol shown in the sidebar here and in every tenant's POS.
+            Replaces the plain <strong>EP</strong> tile. Use a square PNG or SVG with a
+            transparent background — it is stored once and picked up by every shop.
+          </p>
+          <div style="display:flex;align-items:center;gap:1.4rem;flex-wrap:wrap">
+            <div style="text-align:center">
+              <div id="brandPreview" style="width:84px;height:84px;border:1px solid var(--border);border-radius:14px;display:flex;align-items:center;justify-content:center;background:#fff;overflow:hidden">
+                <span style="font-size:.75rem;color:var(--muted)">none</span>
+              </div>
+              <div style="font-size:.68rem;color:var(--muted);margin-top:.35rem">preview</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:.6rem">
+              <input type="file" id="brandFile" accept="image/png,image/svg+xml,image/jpeg,image/webp" onchange="onBrandFilePicked(this)" style="font-size:.82rem"/>
+              <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+                <button class="btn btn-green btn-sm" id="brandSaveBtn" onclick="saveBrandLogo()" disabled>Save Logo</button>
+                <button class="btn btn-outline btn-sm" onclick="removeBrandLogo()">Remove</button>
+              </div>
+              <div id="brandStatus" style="font-size:.78rem;min-height:18px;color:var(--muted)"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="section" id="section-seed">
       <div class="table-card">
         <div class="table-header">
@@ -866,11 +901,160 @@ function showSection(id,btn){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('section-'+id).classList.add('active');
   if(btn) btn.classList.add('active');
-  document.getElementById('pageTitle').textContent={dashboard:'Dashboard',clients:'Clients',invoices:'Invoices',modules:'Module Manager',staff:'Staff Users',seed:'Seed Data'}[id];
+  document.getElementById('pageTitle').textContent={dashboard:'Dashboard',clients:'Clients',invoices:'Invoices',modules:'Module Manager',staff:'Staff Users',branding:'Platform Branding',seed:'Seed Data'}[id];
   document.getElementById('searchInput').style.display  = id==='clients'?'block':'none';
   document.getElementById('onboardBtn').style.display   = id==='clients'?'flex':'none';
   if(id==='seed') renderSeedPreview();
   if(id==='staff') renderAdminStaff();
+  if(id==='branding') renderBranding();
+}
+
+// ── PLATFORM BRANDING ─────────────────────────────────────────
+// The EdosPoa symbol is platform-wide, not per-shop, so it lives once in the
+// platform account's settings row and every tenant's POS reads it from there.
+// Stored as a data URL, downscaled on upload so the settings JSON stays small.
+const BRAND_LOGO_CACHE = 'edospoa_brand_logo';
+let pendingBrandLogo = null;
+
+function applyBrandLogo(dataUrl){
+  document.querySelectorAll('.brand-logo').forEach(el=>{
+    if(dataUrl){
+      el.classList.add('has-logo');
+      el.innerHTML = `<img src="${dataUrl}" alt="EdosPoa"/>`;
+    } else {
+      el.classList.remove('has-logo');
+      el.textContent = 'EP';
+    }
+  });
+  // When running inside the POS, tell the host so its own sidebar mark updates
+  // straight away rather than on the next sign-in.
+  if(window.parent!==window){
+    try{ window.parent.postMessage({type:'edospoa-brand-logo',logo:dataUrl||''},'*'); }catch(e){}
+  }
+}
+
+async function loadBrandLogo(){
+  // Paint from cache first so the mark does not flash on every page load.
+  try{
+    const cached = localStorage.getItem(BRAND_LOGO_CACHE);
+    if(cached) applyBrandLogo(cached);
+  }catch(e){}
+
+  const platform = platformAccount();
+  if(!platform) return;
+  const {data} = await SB.from('pos_shop_settings').select('settings').eq('shop_id',platform.id).maybeSingle();
+  const logo = data?.settings?.platformLogo || '';
+  applyBrandLogo(logo);
+  try{
+    if(logo) localStorage.setItem(BRAND_LOGO_CACHE,logo);
+    else localStorage.removeItem(BRAND_LOGO_CACHE);
+  }catch(e){}
+}
+
+function renderBranding(){
+  const prev = document.getElementById('brandPreview');
+  const current = localStorage.getItem(BRAND_LOGO_CACHE) || '';
+  prev.innerHTML = current
+    ? `<img src="${current}" style="max-width:100%;max-height:100%;object-fit:contain"/>`
+    : `<span style="font-size:.75rem;color:var(--muted)">none</span>`;
+  document.getElementById('brandStatus').textContent = '';
+  document.getElementById('brandSaveBtn').disabled = true;
+  pendingBrandLogo = null;
+}
+
+// Downscale to 256px on the long edge before storing. An untouched logo export
+// can be a megabyte or more, and this row is fetched by every POS at login.
+function downscaleImage(file, max = 256){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read that file'));
+    reader.onload = () => {
+      const src = String(reader.result);
+      // SVG is already resolution-independent — resizing it through a canvas
+      // would only rasterise it, so it is stored as-is.
+      if(file.type === 'image/svg+xml') return resolve(src);
+      const img = new Image();
+      img.onerror = () => reject(new Error('That file is not a readable image'));
+      img.onload = () => {
+        const scale = Math.min(1, max/Math.max(img.width,img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width*scale);
+        c.height = Math.round(img.height*scale);
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+        resolve(c.toDataURL('image/png'));   // PNG keeps the transparency
+      };
+      img.src = src;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function onBrandFilePicked(input){
+  const file = input.files && input.files[0];
+  const status = document.getElementById('brandStatus');
+  if(!file) return;
+  try{
+    pendingBrandLogo = await downscaleImage(file);
+    document.getElementById('brandPreview').innerHTML =
+      `<img src="${pendingBrandLogo}" style="max-width:100%;max-height:100%;object-fit:contain"/>`;
+    const kb = Math.round(pendingBrandLogo.length*3/4/1024);
+    status.style.color = 'var(--muted)';
+    status.textContent = `Ready to save (~${kb} KB).`;
+    document.getElementById('brandSaveBtn').disabled = false;
+  }catch(e){
+    pendingBrandLogo = null;
+    status.style.color = 'var(--red)';
+    status.textContent = e.message;
+  }
+}
+
+// Written into the platform account's settings row, merged so nothing else in
+// that shop's settings is clobbered.
+async function writeBrandLogo(dataUrl){
+  const platform = platformAccount();
+  if(!platform) throw new Error('No platform account is set — mark one 🏠 Platform on the Clients table first');
+  const {data} = await SB.from('pos_shop_settings').select('settings').eq('shop_id',platform.id).maybeSingle();
+  const settings = { ...(data?.settings || {}), platformLogo: dataUrl || '' };
+  const {error} = await SB.from('pos_shop_settings')
+    .upsert({ shop_id:platform.id, settings, updated_at:new Date().toISOString() });
+  if(error) throw error;
+}
+
+async function saveBrandLogo(){
+  const status = document.getElementById('brandStatus');
+  const btn = document.getElementById('brandSaveBtn');
+  if(!pendingBrandLogo){ status.textContent='Choose an image first.'; return; }
+  btn.disabled = true; status.style.color='var(--muted)'; status.textContent='Saving…';
+  try{
+    await writeBrandLogo(pendingBrandLogo);
+    try{ localStorage.setItem(BRAND_LOGO_CACHE,pendingBrandLogo); }catch(e){}
+    applyBrandLogo(pendingBrandLogo);
+    pendingBrandLogo = null;
+    status.style.color='var(--green)';
+    status.textContent='Saved — every shop picks it up on next sign-in.';
+    toast('Platform logo updated ✓');
+  }catch(e){
+    status.style.color='var(--red)';
+    status.textContent = (e.message||String(e)) + (String(e.message||'').includes('row-level security')
+      ? ' — run supabase/migrations/pos_shop_settings_policy.sql first.' : '');
+    btn.disabled = false;
+  }
+}
+
+async function removeBrandLogo(){
+  const status = document.getElementById('brandStatus');
+  const ok = await confirm2('🎨','Remove Logo?','The sidebar goes back to the plain EP tile everywhere.','Remove','btn-danger');
+  if(!ok) return;
+  try{
+    await writeBrandLogo('');
+    try{ localStorage.removeItem(BRAND_LOGO_CACHE); }catch(e){}
+    applyBrandLogo('');
+    renderBranding();
+    toast('Platform logo removed');
+  }catch(e){
+    status.style.color='var(--red)';
+    status.textContent = e.message||String(e);
+  }
 }
 function navTo(id){
   const btns=document.querySelectorAll('.nav-item');
@@ -1026,6 +1210,7 @@ async function init(){
   renderModLib();
   renderModStats();
   renderBillingStats();
+  loadBrandLogo();
 }
 
 function renderBillingStats(){
