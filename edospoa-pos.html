@@ -231,8 +231,22 @@ label{font-size:10px;color:var(--muted);display:block;margin-bottom:3px}
 .inv-payments-hd{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#166534;margin-bottom:8px}
 .inv-pay-row{display:flex;justify-content:space-between;font-size:11px;color:#166534;margin-bottom:3px}
 .inv-pay-row.balance{color:#dc2626;font-weight:700;border-top:1px solid #bbf7d0;padding-top:6px;margin-top:4px}
-.inv-pay-instructions{background:#fffdf5;border:1px solid #e8dfc0;border-radius:6px;padding:12px 16px;margin-top:18px;margin-bottom:22px;font-size:11px;color:#3a2d00;line-height:1.9}
+.inv-pay-instructions{background:#fffdf5;border:1px solid #e8dfc0;border-radius:6px;padding:12px 16px;margin-top:18px;margin-bottom:22px;font-size:11px;color:#3a2d00;line-height:1.9;page-break-inside:avoid;break-inside:avoid}
 .inv-pay-instructions strong{display:block;margin-bottom:4px;font-size:12px;color:#1a1000}
+/* Payment details are a label/value list, not prose. Tables rather than grid or
+   flex because html2canvas rasterises these documents and renders tables most
+   faithfully. font-size:0 on the wrapper eats the whitespace between the two
+   inline-block columns so they actually fit side by side at 50% each. */
+.inv-pay-cols{margin-top:6px;font-size:0}
+.inv-pay-col{display:inline-block;vertical-align:top;box-sizing:border-box;width:50%;padding-right:14px;font-size:11px}
+.inv-pay-col.pay-col-2{padding-right:0;padding-left:14px}
+.inv-pay-col.pay-col-solo{width:100%;padding:0}
+.inv-pay-table{width:100%;border-collapse:collapse;line-height:1.5}
+.inv-pay-sec{font-size:9px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#8a7530;padding:0 0 3px;border-bottom:1px solid #e8dfc0;text-align:left}
+.inv-pay-lbl{padding:3px 10px 3px 0;color:#6b5d2a;white-space:nowrap;vertical-align:top;font-weight:400;text-align:left}
+.inv-pay-val{padding:3px 0;font-weight:700;color:#1a1000;text-align:right;vertical-align:top;word-break:break-word}
+.inv-pay-foot{margin-top:9px;padding-top:6px;border-top:1px solid #efe7cc;font-size:10.5px;color:#4a3c10;line-height:1.6}
+.inv-pay-free{line-height:1.7}
 .inv-sig{display:grid;grid-template-columns:1fr 1fr;gap:48px;margin-bottom:22px}
 .inv-sig-block{display:flex;flex-direction:column}
 .inv-sig-label{font-size:10px;font-weight:700;color:#333;margin-bottom:6px}
@@ -2051,31 +2065,70 @@ function normalizeSettings(raw) {
 // into the free-text box. That is exactly what happened here: EDOS CENTRE saved
 // its Stanbic account and M-Pesa paybill, and its invoices kept printing an old
 // KCB account and till because only the free-text box was ever rendered.
-function paymentDetailLines() {
+// Grouped under the heading a payer actually looks for — "M-Pesa" or "Bank
+// Transfer" — with every field on its own labelled row.
+//
+// Branch is deliberately not printed. A Kenyan transfer needs the bank, the
+// account number and the account name; the branch adds a line without adding
+// anything a payer can act on. It is still kept under Settings for the shop's
+// own records.
+function paymentDetailSections() {
   const S = SETTINGS || {};
   const v = k => String(S[k] == null ? '' : S[k]).trim();
-  const lines = [];
-  if (v('mpesaPaybill')) {
-    lines.push(`M-Pesa Paybill: <strong>${v('mpesaPaybill')}</strong>`
-      + (v('mpesaAccount') ? ` &nbsp;&middot;&nbsp; Account: <strong>${v('mpesaAccount')}</strong>` : ''));
+  const sections = [];
+
+  const mpesa = [];
+  if (v('mpesaPaybill')) mpesa.push(['Paybill',        v('mpesaPaybill')]);
+  if (v('mpesaAccount')) mpesa.push(['Account Number', v('mpesaAccount')]);
+  if (v('mpesaTill'))    mpesa.push(['Till Number',    v('mpesaTill')]);
+  if (mpesa.length) sections.push({ title: 'M-Pesa', rows: mpesa });
+
+  const bank = [];
+  if (v('bankName'))    bank.push(['Bank',           v('bankName')]);
+  if (v('bankAccount')) bank.push(['Account Number', v('bankAccount')]);
+  if (v('bankHolder'))  bank.push(['Account Name',   v('bankHolder')]);
+  if (bank.length) sections.push({ title: 'Bank Transfer', rows: bank });
+
+  return sections;
+}
+
+// Whatever the shop typed into the old free-text box, used only when it has
+// filled in none of the structured fields above.
+function paymentFallbackLines() {
+  const S = SETTINGS || {};
+  return String(S.paymentInstructions == null ? '' : S.paymentInstructions)
+    .split('\n').map(l => l.trim()).filter(Boolean);
+}
+
+function hasAnyPaymentDetails() {
+  return !!(paymentDetailSections().length || paymentFallbackLines().length);
+}
+
+// The M-Pesa and Bank blocks sit side by side when both exist, and one runs
+// full width when only one does — a lone half-width column with dead space
+// beside it looks like something failed to load.
+function paymentSectionsHTML() {
+  const sections = paymentDetailSections();
+  if (!sections.length) {
+    const free = paymentFallbackLines();
+    return free.length ? `<div class="inv-pay-free">${free.join('<br/>')}</div>` : '';
   }
-  if (v('mpesaTill')) lines.push(`M-Pesa Till: <strong>${v('mpesaTill')}</strong>`);
-  if (v('bankName')) {
-    lines.push(`Bank: <strong>${v('bankName')}</strong>` + (v('bankBranch') ? `, ${v('bankBranch')}` : ''));
-  }
-  if (v('bankAccount')) lines.push(`Account Number: <strong>${v('bankAccount')}</strong>`);
-  if (v('bankHolder'))  lines.push(`Account Name: <strong>${v('bankHolder')}</strong>`);
-  if (lines.length) return lines;
-  return v('paymentInstructions').split('\n').map(l => l.trim()).filter(Boolean);
+  const solo = sections.length === 1;
+  return `<div class="inv-pay-cols">${sections.map((sec, i) => `
+    <div class="inv-pay-col${solo ? ' pay-col-solo' : (i === 1 ? ' pay-col-2' : '')}">
+      <table class="inv-pay-table">
+        <tr><th class="inv-pay-sec" colspan="2">${sec.title}</th></tr>
+        ${sec.rows.map(([label, value]) =>
+          `<tr><td class="inv-pay-lbl">${label}</td><td class="inv-pay-val">${value}</td></tr>`).join('')}
+      </table>
+    </div>`).join('')}</div>`;
 }
 
 // True when the structured fields are carrying the payment block, which means
 // anything in the free-text box is being ignored. Used by Settings to say so
 // rather than leaving an owner to wonder why their edits do not show up.
 function hasStructuredPayDetails() {
-  const S = SETTINGS || {};
-  return ['mpesaPaybill','mpesaTill','bankName','bankAccount','bankHolder']
-    .some(k => String(S[k] == null ? '' : S[k]).trim());
+  return paymentDetailSections().length > 0;
 }
 
 // Get departments from settings (fallback to SETTINGS_DEFAULTS if not set)
@@ -4092,11 +4145,11 @@ function buildInvoiceHTML(inv) {
       ${balance > 0 ? `<div class="inv-pay-row balance"><span>Balance Due</span><span>${fmt(balance)}</span></div>` : ''}
     </div>` : ''}
     ${(() => {
-      const payLines = paymentDetailLines();
-      if (!payLines.length && !S.email) return '';
+      if (!hasAnyPaymentDetails() && !S.email) return '';
       return `<div class="inv-pay-instructions">
       <strong>Payment Instructions</strong>
-      ${payLines.join('<br/>')}${payLines.length && S.email ? '<br/>' : ''}${S.email ? `Email &mdash; ${S.email}` : ''}
+      ${paymentSectionsHTML()}
+      ${S.email ? `<div class="inv-pay-foot">Payment queries &mdash; ${S.email}</div>` : ''}
     </div>`;
     })()}
     ${S.invoiceTerms ? `<div class="inv-pay-instructions" style="margin-top:8px">
@@ -4234,11 +4287,10 @@ function buildQuotationHTML(inv) {
       // Settings tells owners their bank and M-Pesa details appear on quotations
       // as well as invoices, and a quote that asks for a deposit is useless
       // without them. They were never actually rendered here.
-      const payLines = paymentDetailLines();
-      if (!payLines.length) return '';
+      if (!hasAnyPaymentDetails()) return '';
       return `<div class="inv-pay-instructions" style="margin-bottom:8px">
       <strong>Payment Details</strong>
-      ${payLines.join('<br/>')}
+      ${paymentSectionsHTML()}
     </div>`;
     })()}
     <div class="inv-pay-instructions">
@@ -4316,9 +4368,25 @@ function buildReceiptHTML(inv) {
         : `<div class="receipt-footer-line" style="font-weight:700;font-size:11px">${fmtPayMethod(inv.payMethod)}</div>`
       }
       ${(() => {
-        const payLines = paymentDetailLines();
-        if (!payLines.length && !S.email && !S.bizPhone1) return '';
-        return `<div style="margin-top:10px;font-size:9px;line-height:1.9">${payLines.join('<br/>')}${payLines.length && (S.email || S.bizPhone1) ? '<br/>' : ''}${S.email?'📧 '+S.email:''}${S.bizPhone1?(S.email?'<br/>':'')+'📞 '+S.bizPhone1:''}</div>`;
+        // The receipt is an 80mm monospace slip, so the sections stack instead
+        // of sitting side by side and the labels stay short.
+        const sections = paymentDetailSections();
+        const free = sections.length ? [] : paymentFallbackLines();
+        if (!sections.length && !free.length && !S.email && !S.bizPhone1) return '';
+        const body = sections.length
+          ? sections.map(sec => `
+              <div style="margin-top:6px;font-weight:700;letter-spacing:.5px">${sec.title.toUpperCase()}</div>
+              <table style="width:100%;border-collapse:collapse">
+                ${sec.rows.map(([label, value]) => `<tr>
+                  <td style="padding:1px 6px 1px 0;text-align:left;white-space:nowrap">${label}</td>
+                  <td style="padding:1px 0;text-align:right;font-weight:700;word-break:break-word">${value}</td>
+                </tr>`).join('')}
+              </table>`).join('')
+          : `<div>${free.join('<br/>')}</div>`;
+        const contact = [S.email ? '📧 ' + S.email : '', S.bizPhone1 ? '📞 ' + S.bizPhone1 : ''].filter(Boolean).join('<br/>');
+        return `<div style="margin-top:10px;font-size:9px;line-height:1.5;text-align:left">${body}
+          ${contact ? `<div style="margin-top:7px;padding-top:5px;border-top:1px dashed var(--border)">${contact}</div>` : ''}
+        </div>`;
       })()}
       <div style="margin-top:10px;font-size:9px;color:var(--muted)">${S.invoiceFootnote || 'We Deliver Quality.'}</div>
     </div>
