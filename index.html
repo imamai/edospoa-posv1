@@ -1252,7 +1252,7 @@ async function sendInvoiceAutomatedWhatsApp(invId, phone, clientName) {
             const balance = inv.total - totalPaid;
             const statusLabel = totalPaid >= inv.total ? 'PAID' : totalPaid > 0 ? 'PARTIAL' : 'UNPAID';
 
-            const message = `📋 *MEJASON MEDIA - INVOICE*\n\n` +
+            const message = `📋 *${wsShopLabel()} - INVOICE*\n\n` +
               `*Invoice #:* ${inv.id}\n*Date:* ${inv.date}\n*Client:* ${clientName}\n\n` +
               `*Total:* ${fmt(inv.total)}\n*Status:* ${statusLabel}\n\n` +
               `📎 Invoice PDF attached`;
@@ -1317,11 +1317,18 @@ async function sendInvoiceAutomatedWhatsApp(invId, phone, clientName) {
   }
 }
 
+// The sending shop's own name for the WhatsApp message header. This was
+// hardcoded to one tenant, so every shop on the platform sent invoices
+// announcing that they came from Mejason Media.
+function wsShopLabel() {
+  return String(SETTINGS.bizName || currentShopName || 'INVOICE').toUpperCase();
+}
+
 function openWhatsAppFallback(phone, clientName, inv) {
   const totalPaid = invPayments(inv.id).reduce((a, p) => a + p.amount, 0);
   const statusLabel = totalPaid >= inv.total ? 'PAID' : totalPaid > 0 ? 'PARTIAL' : 'UNPAID';
-  
-  const message = `📋 *MEJASON MEDIA - INVOICE*\n\n` +
+
+  const message = `📋 *${wsShopLabel()} - INVOICE*\n\n` +
     `*Invoice #:* ${inv.id}\n*Date:* ${inv.date}\n*Client:* ${clientName}\n\n` +
     `*Total:* ${fmt(inv.total)}\n*Status:* ${statusLabel}\n\n` +
     `📎 Please request invoice PDF if needed.`;
@@ -1695,6 +1702,11 @@ function logout() {
   currentUser = null; cart = [];
   invoices = []; clients = []; payments = []; expenses = [];
   currentShopId = ''; currentShopName = ''; assignedModules = []; currentShopIsPlatform = false;
+  // Drop this shop's identity, payment details and departments with the rest of
+  // its data. loadShopSettings() clears these too, but doing it here means a
+  // signed-out browser is not sitting on the last shop's bank account.
+  SETTINGS = { ...SETTINGS_DEFAULTS };
+  DEPTS = getDepts();
   const pf = document.getElementById('page-platform');
   if (pf) { pf.innerHTML = ''; delete pf.dataset.loaded; }  // drop the embedded admin on logout
   if (billingWatcherTimer) { clearInterval(billingWatcherTimer); billingWatcherTimer = null; }
@@ -2008,18 +2020,84 @@ function shopEmailDetails() {
   };
 }
 
+// Settings rows written by older builds are not clean. A field that had no
+// default at the time was stored as null, and a field rendered into a form
+// template while undefined came back as the literal string "undefined" and was
+// saved that way. Both reach the documents as-is: a null blows up the PDF
+// builders on .split()/.toUpperCase(), and "undefined" prints as
+// "KRA PIN: undefined". Fold both back onto the defaults on the way in.
+function normalizeSettings(raw) {
+  const out = { ...SETTINGS_DEFAULTS };
+  Object.keys(raw || {}).forEach(k => {
+    const val = raw[k];
+    if (val === null || val === undefined) return;
+    if (typeof val === 'string') {
+      const t = val.trim();
+      if (t === 'undefined' || t === 'null') return;
+    }
+    out[k] = val;
+  });
+  return out;
+}
+
+// The payment details printed on this shop's invoices, quotations and receipts.
+//
+// The structured M-Pesa and Bank fields under Settings are the source of truth.
+// They are what each shop actually edits, what the Settings page promises will
+// appear on documents, and what outbound email already sends. The free-text
+// "Payment Instructions" box predates those fields and is now only used when a
+// shop has filled in none of them — otherwise a shop that updates its bank
+// account under Settings would still send out whatever account was once typed
+// into the free-text box. That is exactly what happened here: EDOS CENTRE saved
+// its Stanbic account and M-Pesa paybill, and its invoices kept printing an old
+// KCB account and till because only the free-text box was ever rendered.
+function paymentDetailLines() {
+  const S = SETTINGS || {};
+  const v = k => String(S[k] == null ? '' : S[k]).trim();
+  const lines = [];
+  if (v('mpesaPaybill')) {
+    lines.push(`M-Pesa Paybill: <strong>${v('mpesaPaybill')}</strong>`
+      + (v('mpesaAccount') ? ` &nbsp;&middot;&nbsp; Account: <strong>${v('mpesaAccount')}</strong>` : ''));
+  }
+  if (v('mpesaTill')) lines.push(`M-Pesa Till: <strong>${v('mpesaTill')}</strong>`);
+  if (v('bankName')) {
+    lines.push(`Bank: <strong>${v('bankName')}</strong>` + (v('bankBranch') ? `, ${v('bankBranch')}` : ''));
+  }
+  if (v('bankAccount')) lines.push(`Account Number: <strong>${v('bankAccount')}</strong>`);
+  if (v('bankHolder'))  lines.push(`Account Name: <strong>${v('bankHolder')}</strong>`);
+  if (lines.length) return lines;
+  return v('paymentInstructions').split('\n').map(l => l.trim()).filter(Boolean);
+}
+
+// True when the structured fields are carrying the payment block, which means
+// anything in the free-text box is being ignored. Used by Settings to say so
+// rather than leaving an owner to wonder why their edits do not show up.
+function hasStructuredPayDetails() {
+  const S = SETTINGS || {};
+  return ['mpesaPaybill','mpesaTill','bankName','bankAccount','bankHolder']
+    .some(k => String(S[k] == null ? '' : S[k]).trim());
+}
+
 // Get departments from settings (fallback to SETTINGS_DEFAULTS if not set)
 function getDepts() {
   return (SETTINGS.departments && SETTINGS.departments.length) ? SETTINGS.departments : SETTINGS_DEFAULTS.departments;
 }
 
 async function loadShopSettings() {
+  // Clear first, always. SETTINGS is a module-level singleton, so without this
+  // every path that fails to produce settings for this shop — no cloud row, no
+  // local cache, Supabase not configured, or the early return below — leaves
+  // the *previous* shop's business name, till and bank account in place. Sign
+  // out of one shop and into another in the same tab and that shop's invoices
+  // went out carrying the first shop's payment details.
+  SETTINGS = { ...SETTINGS_DEFAULTS };
+  DEPTS = getDepts();
   if (!useSupabase || !currentShopId) return;
   try {
     const { data } = await sb.from('pos_shop_settings').select('settings').eq('shop_id', currentShopId).single();
     if (data && data.settings) {
       const { _services, ...settingsOnly } = data.settings;
-      SETTINGS = { ...SETTINGS_DEFAULTS, ...settingsOnly };
+      SETTINGS = normalizeSettings(settingsOnly);
       DEPTS = getDepts();  // Update DEPTS from settings
       if (_services && Array.isArray(_services) && _services.length) SERVICES = _services;
       return;
@@ -2040,7 +2118,7 @@ async function loadShopSettings() {
     if (cached) {
       ownedLocally = !!own;
       const { _services, ...settingsOnly } = JSON.parse(cached);
-      SETTINGS = { ...SETTINGS_DEFAULTS, ...settingsOnly };
+      SETTINGS = normalizeSettings(settingsOnly);
       DEPTS = getDepts();  // Update DEPTS from settings
       if (_services && Array.isArray(_services) && _services.length) SERVICES = _services;
     }
@@ -4013,11 +4091,14 @@ function buildInvoiceHTML(inv) {
       </div>
       ${balance > 0 ? `<div class="inv-pay-row balance"><span>Balance Due</span><span>${fmt(balance)}</span></div>` : ''}
     </div>` : ''}
-    <div class="inv-pay-instructions">
+    ${(() => {
+      const payLines = paymentDetailLines();
+      if (!payLines.length && !S.email) return '';
+      return `<div class="inv-pay-instructions">
       <strong>Payment Instructions</strong>
-      ${S.paymentInstructions.split('\n').map(line => line.trim()).filter(Boolean).join('<br/>')}<br/>
-      Email &mdash; ${S.email}
-    </div>
+      ${payLines.join('<br/>')}${payLines.length && S.email ? '<br/>' : ''}${S.email ? `Email &mdash; ${S.email}` : ''}
+    </div>`;
+    })()}
     ${S.invoiceTerms ? `<div class="inv-pay-instructions" style="margin-top:8px">
       <strong>Terms &amp; Conditions</strong>
       ${S.invoiceTerms.split('\n').map(line => line.trim()).filter(Boolean).join('<br/>')}
@@ -4149,6 +4230,17 @@ function buildQuotationHTML(inv) {
         <span class="val">${fmt(inv.total)}</span>
       </div>
     </div>
+    ${(() => {
+      // Settings tells owners their bank and M-Pesa details appear on quotations
+      // as well as invoices, and a quote that asks for a deposit is useless
+      // without them. They were never actually rendered here.
+      const payLines = paymentDetailLines();
+      if (!payLines.length) return '';
+      return `<div class="inv-pay-instructions" style="margin-bottom:8px">
+      <strong>Payment Details</strong>
+      ${payLines.join('<br/>')}
+    </div>`;
+    })()}
     <div class="inv-pay-instructions">
       <strong>Terms & Conditions</strong>
       ${(S.quotationTerms || '').split('\n').map(line => line.trim()).filter(Boolean).join('<br/>')}
@@ -4186,7 +4278,7 @@ function buildReceiptHTML(inv) {
       ${S.logoDataUrl
         ? `<img src="${S.logoDataUrl}" style="max-height:52px;max-width:140px;object-fit:contain;display:block;margin:0 auto 6px"/>`
         : `<div class="receipt-logo">${(S.bizName||'M')[0].toUpperCase()}</div>`}
-      <div class="receipt-company"><strong>${S.bizName.toUpperCase()}</strong><br/>${S.bizLocation}<br/>${S.bizPhone1}</div>
+      <div class="receipt-company"><strong>${(S.bizName || currentShopName || '').toUpperCase()}</strong><br/>${S.bizLocation}<br/>${S.bizPhone1}</div>
     </div>
     <div style="text-align:center;font-size:9px;margin-bottom:10px">
       Receipt #: ${inv.id}<br/>Date: ${inv.date} ${inv.time}
@@ -4223,7 +4315,11 @@ function buildReceiptHTML(inv) {
         ? pays.map(p => `<div class="receipt-footer-line" style="font-weight:700;font-size:11px;display:flex;justify-content:space-between">${fmtPayMethod(p.method)}<span>${fmt(p.amount)}</span></div>`).join('')
         : `<div class="receipt-footer-line" style="font-weight:700;font-size:11px">${fmtPayMethod(inv.payMethod)}</div>`
       }
-      ${S.paymentInstructions ? `<div style="margin-top:10px;font-size:9px;line-height:1.9">${S.paymentInstructions.split('\n').filter(Boolean).map(l=>l.trim()).join('<br/>')}${S.email?'<br/>📧 '+S.email:''}${S.bizPhone1?'<br/>📞 '+S.bizPhone1:''}</div>` : ''}
+      ${(() => {
+        const payLines = paymentDetailLines();
+        if (!payLines.length && !S.email && !S.bizPhone1) return '';
+        return `<div style="margin-top:10px;font-size:9px;line-height:1.9">${payLines.join('<br/>')}${payLines.length && (S.email || S.bizPhone1) ? '<br/>' : ''}${S.email?'📧 '+S.email:''}${S.bizPhone1?(S.email?'<br/>':'')+'📞 '+S.bizPhone1:''}</div>`;
+      })()}
       <div style="margin-top:10px;font-size:9px;color:var(--muted)">${S.invoiceFootnote || 'We Deliver Quality.'}</div>
     </div>
   </div>`;
@@ -4801,19 +4897,26 @@ function updatePaymentDetails() {
   const detailsBox = document.getElementById('payment-details-box');
   if (!detailsBox) return;
   
+  // Only print the lines this shop has actually filled in — an unset field used
+  // to render as "Paybill: " with nothing after it, which reads to a cashier as
+  // though the shop has no paybill rather than as a setting nobody entered.
+  const _sv = k => String(SETTINGS[k] == null ? '' : SETTINGS[k]).trim();
+  const _line = (label, key) => _sv(key) ? `${label}: <strong>${_sv(key)}</strong><br/>` : '';
+  const _unset = `<span style="color:#b45309">Not set — add it under Settings.</span><br/>`;
+
   if (method === 'mpesa') {
+    const _mp = _line('Paybill', 'mpesaPaybill') + _line('Account', 'mpesaAccount') + _line('Till', 'mpesaTill');
     detailsBox.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px;font-size:11px;color:#166534">
       <strong>M-Pesa Payment Details:</strong><br/>
-      Paybill: <strong>${SETTINGS.mpesaPaybill}</strong><br/>
-      Account: <strong>${SETTINGS.mpesaAccount}</strong><br/>
+      ${_mp || _unset}
       <span style="color:var(--muted);font-size:10px">Customer enters amount on their phone and sends PIN.</span>
     </div>`;
   } else if (method === 'bank') {
+    const _bk = _line('Bank', 'bankName') + _line('Account Number', 'bankAccount')
+      + _line('Account Name', 'bankHolder') + _line('Branch', 'bankBranch');
     detailsBox.innerHTML = `<div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
       <strong>Bank Transfer Details:</strong><br/>
-      Bank: <strong>${SETTINGS.bankName}</strong><br/>
-      Account Number: <strong>${SETTINGS.bankAccount}</strong><br/>
-      Account Name: <strong>${SETTINGS.bankHolder}</strong><br/>
+      ${_bk || _unset}
       <span style="color:var(--muted);font-size:10px;margin-top:4px;display:block">Please get confirmation from customer and enter reference below.</span>
     </div>`;
   } else if (method === 'cash') {
@@ -8100,7 +8203,7 @@ function renderSettings() {
             </div>
           </div>
           <div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
-            <i class="ti ti-info-circle"></i> Bank details and KRA PIN will appear on invoices and quotations. VAT is applied on new sales only — existing invoices retain their original amounts.
+            <i class="ti ti-info-circle"></i> Bank details and KRA PIN appear on invoices, quotations and receipts, and on emailed copies. VAT is applied on new sales only — existing invoices retain their original amounts.
           </div>
         </div>
       </div>
@@ -8125,10 +8228,14 @@ function renderSettings() {
       <div class="card">
         <div class="card-title"><i class="ti ti-receipt" style="color:var(--amber)"></i> Payment Instructions</div>
         <div style="display:grid;gap:10px">
-          <div><label>Payment Instructions (shown on invoices &amp; receipts)</label><textarea id="set-paymentInstructions" style="font-family:monospace;font-size:12px;padding:8px;border:1px solid #ccc;border-radius:6px;min-height:60px;resize:vertical">${s.paymentInstructions}</textarea></div>
-          <div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
-            <i class="ti ti-info-circle"></i> Each line appears on invoices and receipts. Use "KCB Bank — Account XXX" format.
-          </div>
+          <div><label>Payment Instructions (used only if M-Pesa and Bank are both blank)</label><textarea id="set-paymentInstructions" style="font-family:monospace;font-size:12px;padding:8px;border:1px solid #ccc;border-radius:6px;min-height:60px;resize:vertical">${s.paymentInstructions}</textarea></div>
+          ${hasStructuredPayDetails() && String(s.paymentInstructions || '').trim()
+            ? `<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:10px;font-size:11px;color:#854d0e">
+                 <i class="ti ti-alert-triangle"></i> <strong>This box is not being printed.</strong> Your M-Pesa and Bank details above are on your invoices, quotations and receipts instead. Clear this box to avoid confusion &mdash; anything left here is old text that no longer reaches customers.
+               </div>`
+            : `<div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
+                 <i class="ti ti-info-circle"></i> A fallback for shops that have not filled in the M-Pesa and Bank cards. As soon as you save any paybill, till or bank field, those are used on documents and this box is ignored.
+               </div>`}
         </div>
       </div>
       <div class="card">
