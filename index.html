@@ -2029,7 +2029,14 @@ function shopEmailDetails() {
     bankName:     S.bankName || '',
     bankAccount:  S.bankAccount || '',
     bankHolder:   S.bankHolder || '',
+    // bankBranch is still sent for shops whose own records want it, but the
+    // email template no longer prints it — see the note beside payGroups in
+    // send-invoice-email.js. Documents and email must agree.
     bankBranch:   S.bankBranch || '',
+    // The free-text fallback, so a shop that has filled in none of the
+    // structured fields gets the same payment details in its email as on its
+    // PDF instead of an email with no payment details at all.
+    paymentInstructions: S.paymentInstructions || '',
     footnote:     S.invoiceFootnote || '',
   };
 }
