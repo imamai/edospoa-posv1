@@ -46,13 +46,36 @@ exports.handler = async (event) => {
     const bizName = s.name || 'your supplier';
     const phones = (Array.isArray(s.phones) ? s.phones : []).filter(Boolean);
 
-    const payLines = [
-      s.mpesaTill    ? `📱 <strong>M-Pesa Till Number:</strong> ${esc(s.mpesaTill)}` : '',
-      s.mpesaPaybill ? `📱 <strong>M-Pesa Paybill:</strong> ${esc(s.mpesaPaybill)}${s.mpesaAccount ? ` &nbsp;·&nbsp; Account: ${esc(s.mpesaAccount)}` : ''}` : '',
-      s.bankName     ? `🏦 <strong>Bank Transfer — ${esc(s.bankName)}</strong>${s.bankBranch ? `, ${esc(s.bankBranch)}` : ''}` : '',
-      s.bankAccount  ? `Account: ${esc(s.bankAccount)}` : '',
-      s.bankHolder   ? `Account Name: ${esc(s.bankHolder)}` : '',
-    ].filter(Boolean);
+    // Kept deliberately in step with paymentDetailSections() in edospoa-pos.html:
+    // same groups, same labels, same order, same omissions. A customer who opens
+    // the email and the attached PDF must not find two different sets of payment
+    // details. Branch is not sent on either — a transfer needs the bank, the
+    // account number and the account name, and nothing else here is actionable.
+    const payGroups = [
+      { title: 'M-Pesa', rows: [
+        ['Paybill',        s.mpesaPaybill],
+        ['Account Number', s.mpesaAccount],
+        ['Till Number',    s.mpesaTill],
+      ]},
+      { title: 'Bank Transfer', rows: [
+        ['Bank',           s.bankName],
+        ['Account Number', s.bankAccount],
+        ['Account Name',   s.bankHolder],
+      ]},
+    ]
+      .map(g => ({ title: g.title, rows: g.rows.filter(([, v]) => String(v == null ? '' : v).trim()) }))
+      .filter(g => g.rows.length);
+
+    const payLines = payGroups.length
+      ? payGroups.map(g =>
+          `<strong>${esc(g.title)}</strong><br/>`
+          + g.rows.map(([label, value]) => `${esc(label)}: <strong>${esc(value)}</strong>`).join('<br/>')
+        )
+      // Shops that have filled in none of the structured fields fall back to the
+      // free-text box, exactly as the documents do — otherwise their emailed
+      // invoice would carry no payment details at all while the PDF carries them.
+      : String(s.paymentInstructions == null ? '' : s.paymentInstructions)
+          .split('\n').map(l => l.trim()).filter(Boolean).map(esc);
 
     const contactLines = [
       phones.length ? `📞 Phone: ${phones.map(esc).join(' / ')}` : '',
@@ -62,7 +85,7 @@ exports.handler = async (event) => {
     ].filter(Boolean);
 
     const contactBlock = `
-        ${payLines.length ? `<h3>Payment Methods</h3><p>${payLines.join('<br/>')}</p>` : ''}
+        ${payLines.length ? `<h3>Payment Methods</h3><p>${payLines.join('<br/><br/>')}</p>` : ''}
         ${contactLines.length ? `<h3>Contact Information</h3><p>${contactLines.join('<br/>')}</p>` : ''}
         <p>Thank you for choosing ${esc(bizName)}!</p>
         <p>
