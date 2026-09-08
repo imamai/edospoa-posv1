@@ -28,6 +28,17 @@ function esc(s) {
   ));
 }
 
+// Every amount on an invoice/quotation/cash-sale is stored in KSh regardless
+// of sale currency (see fmtInv in edospoa-pos.html) — this mirrors that same
+// conversion here so the emailed HTML body matches the attached PDF exactly.
+function fmtMoney(n, doc) {
+  const amount = Number(n) || 0;
+  if (doc && doc.currency === 'USD' && doc.fxRate) {
+    return '$' + (amount / doc.fxRate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  return 'KSh ' + amount.toLocaleString();
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method not allowed' };
@@ -122,7 +133,7 @@ exports.handler = async (event) => {
               <td style="border:1px solid #ddd;padding:8px">${d.type}</td>
               <td style="border:1px solid #ddd;padding:8px">${d.date}</td>
               <td style="border:1px solid #ddd;padding:8px">${d.status}</td>
-              <td style="border:1px solid #ddd;padding:8px;text-align:right">KSh ${Number(d.total).toLocaleString()}</td>
+              <td style="border:1px solid #ddd;padding:8px;text-align:right">${fmtMoney(d.total, d)}</td>
             </tr>
           `).join('')}
         </table>
@@ -145,18 +156,18 @@ exports.handler = async (event) => {
             <tr>
               <td style="border:1px solid #ddd;padding:8px">${i.name}</td>
               <td style="border:1px solid #ddd;padding:8px;text-align:right">×${i.qty}</td>
-              <td style="border:1px solid #ddd;padding:8px;text-align:right">KSh ${(i.price * i.qty).toLocaleString()}</td>
+              <td style="border:1px solid #ddd;padding:8px;text-align:right">${fmtMoney(i.price * i.qty, invoice)}</td>
             </tr>
           `).join('')}
         </table>
 
         <h3>Summary</h3>
         <p>
-          <strong>Subtotal:</strong> KSh ${invoice.subtotal.toLocaleString()}<br/>
-          ${invoice.discountAmt > 0 ? `<strong>Discount (${invoice.discountPct}%):</strong> -KSh ${invoice.discountAmt.toLocaleString()}<br/>` : ''}
-          <strong>Total Amount:</strong> KSh ${invoice.total.toLocaleString()}<br/>
-          <strong>Amount Paid:</strong> KSh ${totalPaid.toLocaleString()}<br/>
-          <strong style="color:red">Balance Due:</strong> KSh ${balance.toLocaleString()}
+          <strong>Subtotal:</strong> ${fmtMoney(invoice.subtotal, invoice)}<br/>
+          ${invoice.discountAmt > 0 ? `<strong>Discount (${invoice.discountPct}%):</strong> -${fmtMoney(invoice.discountAmt, invoice)}<br/>` : ''}
+          <strong>Total Amount:</strong> ${fmtMoney(invoice.total, invoice)}<br/>
+          <strong>Amount Paid:</strong> ${fmtMoney(totalPaid, invoice)}<br/>
+          <strong style="color:red">Balance Due:</strong> ${fmtMoney(balance, invoice)}
         </p>
         ${contactBlock}
       `;
