@@ -824,6 +824,12 @@ create policy "shop_expenses" on expenses for all using (true) with check (true)
 'use strict';
 
 const fmt = n => 'KSh ' + Math.round(n).toLocaleString();
+// All amounts are stored in KSh regardless of sale currency — this only
+// converts for display, using the rate snapshotted on the document (or the
+// live cart, via fmtDisplay below) so a document never reflows if the shop's
+// rate changes later.
+const fmtUSD = n => '$' + (n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtInv = (n, inv) => (inv && inv.currency === 'USD' && inv.fxRate) ? fmtUSD(n / inv.fxRate) : fmt(n);
 const PM_LABELS = { cash: 'Cash', mpesa: 'M-Pesa', bank: 'Bank', credit: 'Credit', quotation: 'Quotation', split: 'Split' };
 const fmtPayMethod = pm => pm ? pm.split('+').map(m => PM_LABELS[m.toLowerCase()] || (m.charAt(0).toUpperCase() + m.slice(1))).join(' + ') : '—';
 const now = () => new Date();
@@ -1268,7 +1274,7 @@ async function sendInvoiceAutomatedWhatsApp(invId, phone, clientName) {
 
             const message = `📋 *${wsShopLabel()} - INVOICE*\n\n` +
               `*Invoice #:* ${inv.id}\n*Date:* ${inv.date}\n*Client:* ${clientName}\n\n` +
-              `*Total:* ${fmt(inv.total)}\n*Status:* ${statusLabel}\n\n` +
+              `*Total:* ${fmtInv(inv.total, inv)}\n*Status:* ${statusLabel}\n\n` +
               `📎 Invoice PDF attached`;
 
             updateStatusMessage(statusMsg, '📤 Sending via WhatsApp...');
@@ -1344,7 +1350,7 @@ function openWhatsAppFallback(phone, clientName, inv) {
 
   const message = `📋 *${wsShopLabel()} - INVOICE*\n\n` +
     `*Invoice #:* ${inv.id}\n*Date:* ${inv.date}\n*Client:* ${clientName}\n\n` +
-    `*Total:* ${fmt(inv.total)}\n*Status:* ${statusLabel}\n\n` +
+    `*Total:* ${fmtInv(inv.total, inv)}\n*Status:* ${statusLabel}\n\n` +
     `📎 Please request invoice PDF if needed.`;
   
   const cleanPhone = phone.replace(/\D/g, '');
@@ -1966,6 +1972,10 @@ const SETTINGS_DEFAULTS = {
   signatureDataUrl: '',
   vatEnabled: false,
   vatRate: 16,
+  // USD billing is off by default and the rate is a plain manual figure the
+  // owner keeps in step with the market — there is no live forex lookup.
+  usdEnabled: false,
+  usdRate: 130,
   // Document ID prefix used for invoices/quotations/receipts. When left
   // blank the app auto-derives initials from the shop name (Mejason Media
   // Production → MMP, EDOS CENTRE → EC). Owners can override in Settings.
@@ -2223,7 +2233,7 @@ let clientsPage = 1, clientsPerPage = 100;
 let invoicesPage = 1, invoicesPerPage = 100;
 let _filteredClients = [], _filteredExpenses = [], _filteredInvoiceRows = [];
 let selectedClientIds = new Set(), selectedExpenseIds = new Set(), selectedInvIds = new Set();
-let activePeriod = 'all', mpesaPhone = '', mpesaMode = 'stk';
+let activePeriod = 'all', mpesaPhone = '', mpesaMode = 'stk', saleCurrency = 'KES';
 let periodFrom = '', periodTo = '';
 let svcSearch = '', svcDeptFilter = 'all';
 let svcPerfSearch = '', svcPerfDeptFilter = 'all', svcPerfSort = 'revenue';
@@ -3153,6 +3163,7 @@ function startNewSale() {
   splitPayRows = [];
   mpesaPhone = '';
   mpesaMode  = 'stk';
+  saleCurrency = 'KES';
   if (typeof window !== 'undefined') window._pendingInv = null;
   renderPOS();
   if (typeof nav === 'function') nav('pos', 0);
@@ -3165,6 +3176,7 @@ function renderPOS() {
   splitPayRows = [];
   mpesaPhone = '';
   mpesaMode  = 'stk';
+  saleCurrency = 'KES';
   if (typeof window !== 'undefined') window._pendingInv = null;
   const vd = visibleDepts();
   // If cashier is restricted to one dept, auto-select it and skip "All" tab
@@ -3220,6 +3232,14 @@ function renderPOS() {
           <div>
             <label>Discount %</label><input type="number" id="disc-pct" placeholder="0" min="0" max="100" oninput="recalc()" ${!hasPerm('pos.apply_discount') ? 'disabled title="Discount not permitted"' : ''}/>
           </div>
+          ${SETTINGS.usdEnabled ? `
+          <div style="display:flex;align-items:center;gap:8px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:7px;padding:6px 10px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;font-weight:600;color:#1e40af;margin:0">
+              <input type="checkbox" id="sale-usd-toggle" ${saleCurrency === 'USD' ? 'checked' : ''} onchange="toggleSaleCurrency(this.checked)" style="width:14px;height:14px;accent-color:#2563eb;cursor:pointer"/>
+              Bill this sale in USD
+            </label>
+            <span style="font-size:10px;color:#1e40af;margin-left:auto">1 USD = KSh ${SETTINGS.usdRate || 130}</span>
+          </div>` : ''}
         </div>
         <div class="cart-items" id="cart-items"><div style="color:var(--muted);font-size:11px;text-align:center;padding:16px">Tap a service to add</div></div>
         ${hasPerm('pos.edit_price') ? `<div style="padding:0 12px">
@@ -3232,6 +3252,7 @@ function renderPOS() {
           <div class="cf-row" id="cf-vat-row" style="display:none"><span id="cf-vat-label">VAT (16%)</span><span id="cf-vat">KSh 0</span></div>
 
           <div class="cf-total"><span>Total</span><span id="cf-total" style="color:var(--red)">KSh 0</span></div>
+          <div id="cf-fx-note" style="display:none;font-size:10px;color:#64748b;margin:-6px 0 8px;text-align:right"></div>
           <div id="cf-balance-row" style="display:none;justify-content:space-between;font-size:11px;font-weight:600;color:#dc2626;padding:2px 0 6px"><span>Balance Due</span><span id="cf-balance">KSh 0</span></div>
           <div id="single-paid-row" style="margin-bottom:8px">
             <label style="font-size:10px;color:var(--muted);margin-bottom:3px;display:block">Amount Paid (KSh) <span style="font-weight:400">(blank = full payment)</span></label>
@@ -3457,6 +3478,11 @@ function addSubItemToCart(parentId, itemIdx) {
   closeModal('svc-picker-modal');
 }
 
+function toggleSaleCurrency(on) {
+  saleCurrency = on ? 'USD' : 'KES';
+  recalc();
+}
+
 function recalc() {
   const sub = cart.reduce((a, c) => a + c.price * c.qty, 0);
   const disc = Math.min(parseFloat(document.getElementById('disc-pct')?.value) || 0, 100);
@@ -3464,15 +3490,27 @@ function recalc() {
   const vatRate = SETTINGS.vatEnabled ? (SETTINGS.vatRate || 16) : 0;
   const vatAmt  = Math.round((sub - da) * vatRate / 100);
   const total   = sub - da + vatAmt;
-  const s = document.getElementById('cf-sub'); if (s) s.textContent = fmt(sub);
-  const ds = document.getElementById('cf-disc'); if (ds) ds.textContent = '- ' + fmt(da);
+  // saleCurrency only changes how the cart footer is displayed here — every
+  // stored amount (on the invoice/quotation object too) stays in KSh, since
+  // payments (cash, M-Pesa) are always collected in KSh regardless of the
+  // currency shown on the printed document.
+  const isUsd = saleCurrency === 'USD';
+  const rate  = SETTINGS.usdRate || 130;
+  const disp  = n => isUsd ? fmtUSD(n / rate) : fmt(n);
+  const s = document.getElementById('cf-sub'); if (s) s.textContent = disp(sub);
+  const ds = document.getElementById('cf-disc'); if (ds) ds.textContent = '- ' + disp(da);
   const vr = document.getElementById('cf-vat-row');
   if (vr) { vr.style.display = vatAmt > 0 ? '' : 'none'; }
   const vl = document.getElementById('cf-vat-label'); if (vl) vl.textContent = `VAT (${vatRate}%)`;
-  const va = document.getElementById('cf-vat'); if (va) va.textContent = fmt(vatAmt);
-  const t = document.getElementById('cf-total'); if (t) t.textContent = fmt(total);
+  const va = document.getElementById('cf-vat'); if (va) va.textContent = disp(vatAmt);
+  const t = document.getElementById('cf-total'); if (t) t.textContent = disp(total);
+  const fx = document.getElementById('cf-fx-note');
+  if (fx) {
+    fx.style.display = isUsd ? '' : 'none';
+    if (isUsd) fx.textContent = `Payment is still collected in ${fmt(total)} (rate: 1 USD = KSh ${rate})`;
+  }
   if (payMethod === 'split') updateSplitTotal(total);
-  return { sub, da, vatRate, vatAmt, total, disc };
+  return { sub, da, vatRate, vatAmt, total, disc, currency: saleCurrency, fxRate: isUsd ? rate : null };
 }
 
 function selPM(pm) {
@@ -3630,7 +3668,7 @@ function pickClientSuggestion(id) {
 
 async function checkout() {
   if (!cart.length) { alert('Cart is empty.'); return; }
-  const { sub, da, vatRate, vatAmt, total, disc } = recalc();
+  const { sub, da, vatRate, vatAmt, total, disc, currency, fxRate } = recalc();
   const clientSel    = document.getElementById('cart-client')?.value;
   let   clientName   = document.getElementById('cart-cname')?.value.trim();
   const clientPhone  = document.getElementById('cart-cphone')?.value.trim();
@@ -3642,13 +3680,20 @@ async function checkout() {
 
   if (!clientName) clientName = 'Walk-in #' + uid();
 
-  // Auto-create client record from POS fields if phone supplied and not already known
+  // Auto-create client record from POS fields if phone supplied and not already known.
+  // Track the resolved id (matched or freshly created) so this sale actually
+  // links to that client record — leaving clientId null here is what caused
+  // the client's referral code to be dropped from their invoice.
+  let resolvedClientId = clientSel || null;
   if (!clientSel && clientPhone) {
     const existing = clients.find(c => c.phone === clientPhone);
-    if (!existing) {
+    if (existing) {
+      resolvedClientId = existing.id;
+    } else {
       const nc = { id: uid(), name: clientName, phone: clientPhone, email: clientEmail || '', event: '', birthday: null, notes: '', referral_code: genReferralCode(clientName), referred_by: null, createdAt: dateStr() };
       clients.push(nc);
       await dbInsertClient(nc);
+      resolvedClientId = nc.id;
     }
   }
 
@@ -3674,9 +3719,9 @@ async function checkout() {
     id: nextInvoiceNumber(),
     type: 'invoice',
     clientName, clientPhone, clientEmail: clientEmail || '',
-    clientWhatsApp: clientWA || '', clientId: clientSel || null,
+    clientWhatsApp: clientWA || '', clientId: resolvedClientId,
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
-    vatRate, vatAmt,
+    vatRate, vatAmt, currency, fxRate,
     total, payMethod: effectivePM, status: payMethod === 'credit' ? 'Unpaid' : (isPartial ? 'Partial' : 'Paid'),
     date: saleDate(), time: saleTime(), eventDate: eventDate || saleDate(),
     cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
@@ -3819,7 +3864,7 @@ async function finalizeInvoice(inv) {
 async function checkoutAsQuotation() {
   if (!cart.length) { alert('Cart is empty.'); return; }
   if (!hasPerm('inv.create')) { alert('You do not have permission to create quotations.'); return; }
-  const { sub, da, vatRate, vatAmt, total, disc } = recalc();
+  const { sub, da, vatRate, vatAmt, total, disc, currency, fxRate } = recalc();
   const clientSel   = document.getElementById('cart-client')?.value;
   let   clientName  = document.getElementById('cart-cname')?.value.trim();
   const clientPhone = document.getElementById('cart-cphone')?.value.trim();
@@ -3832,7 +3877,7 @@ async function checkoutAsQuotation() {
     clientName, clientPhone, clientEmail: clientEmail || '',
     clientId: clientSel || null,
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
-    vatRate, vatAmt, total,
+    vatRate, vatAmt, total, currency, fxRate,
     payMethod: 'quotation', status: 'Pending',
     date: saleDate(), time: saleTime(), eventDate: eventDate || saleDate(),
     cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
@@ -3853,7 +3898,7 @@ async function checkoutAsCashSale() {
   // Credit not valid for a cash sale
   if (payMethod === 'credit') { alert('Cash Sale cannot be Credit. Choose Cash, M-Pesa, or Bank.'); return; }
 
-  const { sub, da, vatRate, vatAmt, total, disc } = recalc();
+  const { sub, da, vatRate, vatAmt, total, disc, currency, fxRate } = recalc();
   const clientSel   = document.getElementById('cart-client')?.value;
   let   clientName  = document.getElementById('cart-cname')?.value.trim();
   const clientPhone = document.getElementById('cart-cphone')?.value.trim();
@@ -3863,12 +3908,19 @@ async function checkoutAsCashSale() {
 
   if (!clientName) clientName = 'Walk-in #' + uid();
 
+  // Track the resolved id (matched or freshly created) so this sale actually
+  // links to that client record — leaving clientId null here is what caused
+  // the client's referral code to be dropped from their receipt.
+  let resolvedClientId = clientSel || null;
   if (!clientSel && clientPhone) {
     const existing = clients.find(c => c.phone === clientPhone);
-    if (!existing) {
+    if (existing) {
+      resolvedClientId = existing.id;
+    } else {
       const nc = { id: uid(), name: clientName, phone: clientPhone, email: clientEmail || '', event: '', birthday: null, notes: '', referral_code: genReferralCode(clientName), referred_by: null, createdAt: dateStr() };
       clients.push(nc);
       await dbInsertClient(nc);
+      resolvedClientId = nc.id;
     }
   }
 
@@ -3899,9 +3951,9 @@ async function checkoutAsCashSale() {
     id: nextCashSaleNumber(),
     type: 'cash_sale',
     clientName, clientPhone, clientEmail: clientEmail || '',
-    clientWhatsApp: clientWA || '', clientId: clientSel || null,
+    clientWhatsApp: clientWA || '', clientId: resolvedClientId,
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
-    vatRate, vatAmt, total,
+    vatRate, vatAmt, total, currency, fxRate,
     payMethod: effectivePM, status: isPartial ? 'Partial' : 'Paid',
     date: saleDate(), time: saleTime(), eventDate: eventDate || saleDate(),
     cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
@@ -3926,7 +3978,7 @@ async function checkoutAsCashSale() {
 // ── HOLD ORDER ────────────────────────────────────────────
 async function holdOrder() {
   if (!cart.length) { alert('Cart is empty.'); return; }
-  const { sub, da, vatRate, vatAmt, total, disc } = recalc();
+  const { sub, da, vatRate, vatAmt, total, disc, currency, fxRate } = recalc();
   const clientSel   = document.getElementById('cart-client')?.value;
   let   clientName  = document.getElementById('cart-cname')?.value.trim();
   const clientPhone = document.getElementById('cart-cphone')?.value.trim();
@@ -3942,7 +3994,7 @@ async function holdOrder() {
     clientName, clientPhone, clientEmail: clientEmail || '',
     clientId: clientSel || null,
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
-    vatRate, vatAmt, total,
+    vatRate, vatAmt, total, currency, fxRate,
     payMethod,
     date: dateStr(), time: timeStr(), eventDate: eventDate || dateStr(),
     cashier: currentUser.name, dept: [...new Set(cart.map(c => c.dept))],
@@ -3983,6 +4035,7 @@ async function resumeHeldOrder(id) {
   if (!held) return;
   if (!confirm('Resume this held order? It will be removed from the hold list.')) return;
   cart = JSON.parse(JSON.stringify(held.items || []));
+  saleCurrency = held.currency === 'USD' ? 'USD' : 'KES';
   invoices = invoices.filter(i => i.id !== id);
   if (useSupabase) await sb.from('invoices').delete().eq('id', id).eq('shop_id', currentShopId);
   closeModal('held-orders-modal');
@@ -4010,8 +4063,24 @@ async function deleteHeldOrder(id) {
 }
 
 // ── INVOICE BUILDERS ─────────────────────────────────────
+// Resolves the client record behind a document — by clientId first, falling
+// back to a phone match. Most sales are rung up by typing the client's name
+// and phone rather than picking them from the suggestions list, which leaves
+// clientId unset even though a matching (or freshly auto-created) client
+// record exists. Without this fallback, that client's referral code silently
+// drops off their invoice/quotation/receipt.
+function resolveDocClient(doc) {
+  if (!doc) return null;
+  if (doc.clientId) {
+    const byId = clients.find(c => c.id === doc.clientId);
+    if (byId) return byId;
+  }
+  if (doc.clientPhone) return clients.find(c => c.phone === doc.clientPhone) || null;
+  return null;
+}
+
 function buildInvoiceHTML(inv) {
-  const _invClient = inv.clientId ? clients.find(c => c.id === inv.clientId) : null;
+  const _invClient = resolveDocClient(inv);
   const _refCode   = _invClient?.referral_code || null;
   const pays = invPayments(inv.cashSaleRef || inv.id);
   const totalPaid = pays.reduce((a, p) => a + p.amount, 0);
@@ -4032,8 +4101,8 @@ function buildInvoiceHTML(inv) {
             rows.push(`<tr class="inv-sub-item">
               <td style="padding-left:28px">${subName}</td>
               <td class="c">${sub.qty}</td>
-              <td class="r">${fmt(sub.price)}</td>
-              <td class="r">${fmt(sub.price * sub.qty)}</td>
+              <td class="r">${fmtInv(sub.price, inv)}</td>
+              <td class="r">${fmtInv(sub.price * sub.qty, inv)}</td>
             </tr>`);
           });
         }
@@ -4044,15 +4113,15 @@ function buildInvoiceHTML(inv) {
           rows.push(`<tr>
             <td><strong>${item.name}</strong><br/><span style="font-size:10px;color:#444;line-height:1.9">${subs.join('<br/>')}</span></td>
             <td class="c">${item.qty}</td>
-            <td class="r">${fmt(item.price)}</td>
-            <td class="r">${fmt(item.price * item.qty)}</td>
+            <td class="r">${fmtInv(item.price, inv)}</td>
+            <td class="r">${fmtInv(item.price * item.qty, inv)}</td>
           </tr>`);
         } else {
           rows.push(`<tr>
             <td><strong>${item.name}</strong>${item.desc ? `<br/><span style="font-size:10px;color:#444">${item.desc}</span>` : ''}</td>
             <td class="c">${item.qty}</td>
-            <td class="r">${fmt(item.price)}</td>
-            <td class="r">${fmt(item.price * item.qty)}</td>
+            <td class="r">${fmtInv(item.price, inv)}</td>
+            <td class="r">${fmtInv(item.price * item.qty, inv)}</td>
           </tr>`);
         }
       }
@@ -4064,7 +4133,7 @@ function buildInvoiceHTML(inv) {
   const statusColor = inv.status === 'Paid' ? '#16a34a' : inv.status === 'Partial' ? '#d97706' : '#dc2626';
   const invPmtsList = invPayments(inv.cashSaleRef || inv.id);
   const paymentDisplay = invPmtsList.length > 1
-    ? invPmtsList.map(p => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${fmtPayMethod(p.method)}</span><span>${fmt(p.amount)}</span></div>`).join('')
+    ? invPmtsList.map(p => `<div style="display:flex;justify-content:space-between;gap:8px"><span>${fmtPayMethod(p.method)}</span><span>${fmtInv(p.amount, inv)}</span></div>`).join('')
     : fmtPayMethod(inv.payMethod);
 
   return `<div class="inv-wrap">
@@ -4075,7 +4144,7 @@ function buildInvoiceHTML(inv) {
           : `<div class="inv-logo-mark">${deriveInitials(S.bizName || currentShopName).charAt(0)}</div><div class="inv-logo-tagline">${S.bizName || currentShopName || ''}</div>`}
       </div>
       <div class="inv-title-block">
-        <h1>INVOICE</h1>
+        <h1>INVOICE${inv.currency === 'USD' ? ` <span style="font-size:12px;font-weight:700;color:#2563eb;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:2px 7px;vertical-align:middle">USD</span>` : ''}</h1>
         <div class="inv-company-right">
           <strong>${S.bizName}</strong>
           ${S.bizLocation}<br/>
@@ -4115,41 +4184,42 @@ function buildInvoiceHTML(inv) {
     </div>
     <div class="inv-totals">
       <div class="inv-totals-box">
-        <div class="inv-totals-line"><span class="lbl">Subtotal</span><span class="val">${fmt(inv.subtotal)}</span></div>
-        ${inv.discountAmt > 0 ? `<div class="inv-totals-line discount"><span class="lbl">Discount (${inv.discountPct}%)</span><span class="val">&minus; ${fmt(inv.discountAmt)}</span></div>` : ''}
-        ${inv.vatAmt > 0 ? `<div class="inv-totals-line"><span class="lbl">VAT (${inv.vatRate}%)</span><span class="val">${fmt(inv.vatAmt)}</span></div>` : ''}
-        <div class="inv-totals-line" style="font-weight:700;font-size:13px;border-top:2px solid #ccc;padding-top:8px;margin-top:4px"><span class="lbl" style="color:#111">Total</span><span class="val" style="color:#111">${fmt(inv.total)}</span></div>
-        ${totalPaid > 0 ? `<div class="inv-totals-line" style="color:#16a34a;margin-top:4px"><span class="lbl">Amount Paid</span><span class="val">&minus; ${fmt(totalPaid)}</span></div>` : ''}
-        ${totalPaid > 0 && balance > 0 ? `<div class="inv-totals-line" style="color:#dc2626;font-weight:700;border-top:1px dashed #fca5a5;padding-top:6px;margin-top:4px"><span class="lbl">Balance Due</span><span class="val">${fmt(balance)}</span></div>` : ''}
+        <div class="inv-totals-line"><span class="lbl">Subtotal</span><span class="val">${fmtInv(inv.subtotal, inv)}</span></div>
+        ${inv.discountAmt > 0 ? `<div class="inv-totals-line discount"><span class="lbl">Discount (${inv.discountPct}%)</span><span class="val">&minus; ${fmtInv(inv.discountAmt, inv)}</span></div>` : ''}
+        ${inv.vatAmt > 0 ? `<div class="inv-totals-line"><span class="lbl">VAT (${inv.vatRate}%)</span><span class="val">${fmtInv(inv.vatAmt, inv)}</span></div>` : ''}
+        <div class="inv-totals-line" style="font-weight:700;font-size:13px;border-top:2px solid #ccc;padding-top:8px;margin-top:4px"><span class="lbl" style="color:#111">Total</span><span class="val" style="color:#111">${fmtInv(inv.total, inv)}</span></div>
+        ${inv.currency === 'USD' && inv.fxRate ? `<div class="inv-totals-line" style="font-size:10px;color:#64748b"><span class="lbl">Rate</span><span class="val">1 USD = KSh ${inv.fxRate} (${fmt(inv.total)})</span></div>` : ''}
+        ${totalPaid > 0 ? `<div class="inv-totals-line" style="color:#16a34a;margin-top:4px"><span class="lbl">Amount Paid</span><span class="val">&minus; ${fmtInv(totalPaid, inv)}</span></div>` : ''}
+        ${totalPaid > 0 && balance > 0 ? `<div class="inv-totals-line" style="color:#dc2626;font-weight:700;border-top:1px dashed #fca5a5;padding-top:6px;margin-top:4px"><span class="lbl">Balance Due</span><span class="val">${fmtInv(balance, inv)}</span></div>` : ''}
       </div>
     </div>
     <div style="display:flex;justify-content:flex-end;margin-bottom:4px">
       ${balance > 0
         ? `<div class="inv-amount-due" style="border-color:#dc2626;background:#fff5f5">
              <span class="lbl" style="color:#dc2626">Outstanding Balance</span>
-             <span class="val" style="color:#dc2626">${fmt(balance)}</span>
+             <span class="val" style="color:#dc2626">${fmtInv(balance, inv)}</span>
            </div>`
         : `<div class="inv-amount-due" style="border-color:#16a34a;background:#f0fdf4">
              <span class="lbl" style="color:#16a34a">Paid in Full</span>
-             <span class="val" style="color:#16a34a">${fmt(inv.total)}</span>
+             <span class="val" style="color:#16a34a">${fmtInv(inv.total, inv)}</span>
            </div>`
       }
     </div>
     ${totalPaid > 0 && balance > 0 ? `
     <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:7px;padding:9px 14px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
-      <div style="font-size:11px;color:#9a3412"><strong style="font-size:12px">Partial Payment</strong> &mdash; ${fmt(totalPaid)} received</div>
-      <div style="font-size:13px;font-weight:800;color:#dc2626">Balance: ${fmt(balance)}</div>
+      <div style="font-size:11px;color:#9a3412"><strong style="font-size:12px">Partial Payment</strong> &mdash; ${fmtInv(totalPaid, inv)} received</div>
+      <div style="font-size:13px;font-weight:800;color:#dc2626">Balance: ${fmtInv(balance, inv)}</div>
     </div>` : ''}
     ${pays.length ? `<div class="inv-payments">
       <div class="inv-payments-hd">Payments Received</div>
       ${pays.map(p => `<div class="inv-pay-row">
         <span>${p.paidAt} &mdash; ${fmtPayMethod(p.method)}${p.note ? ' (' + p.note + ')' : ''}</span>
-        <span>${fmt(p.amount)}</span>
+        <span>${fmtInv(p.amount, inv)}</span>
       </div>`).join('')}
       <div class="inv-pay-row" style="border-top:1px solid #bbf7d0;padding-top:6px;margin-top:4px;font-weight:600">
-        <span>Total Paid</span><span>${fmt(totalPaid)}</span>
+        <span>Total Paid</span><span>${fmtInv(totalPaid, inv)}</span>
       </div>
-      ${balance > 0 ? `<div class="inv-pay-row balance"><span>Balance Due</span><span>${fmt(balance)}</span></div>` : ''}
+      ${balance > 0 ? `<div class="inv-pay-row balance"><span>Balance Due</span><span>${fmtInv(balance, inv)}</span></div>` : ''}
     </div>` : ''}
     ${(() => {
       if (!hasAnyPaymentDetails() && !S.email) return '';
@@ -4185,7 +4255,7 @@ function buildInvoiceHTML(inv) {
 }
 
 function buildQuotationHTML(inv) {
-  const _qCl      = inv.clientId ? clients.find(c => c.id === inv.clientId) : null;
+  const _qCl      = resolveDocClient(inv);
   const _qRefCode = _qCl?.referral_code || null;
   const S = SETTINGS;
 
@@ -4203,8 +4273,8 @@ function buildQuotationHTML(inv) {
             rows.push(`<tr class="inv-sub-item">
               <td style="padding-left:28px">${subName}</td>
               <td class="c">${sub.qty}</td>
-              <td class="r">${fmt(sub.price)}</td>
-              <td class="r">${fmt(sub.price * sub.qty)}</td>
+              <td class="r">${fmtInv(sub.price, inv)}</td>
+              <td class="r">${fmtInv(sub.price * sub.qty, inv)}</td>
             </tr>`);
           });
         }
@@ -4215,15 +4285,15 @@ function buildQuotationHTML(inv) {
           rows.push(`<tr>
             <td><strong>${item.name}</strong><br/><span style="font-size:10px;color:#444;line-height:1.9">${subs.join('<br/>')}</span></td>
             <td class="c">${item.qty}</td>
-            <td class="r">${fmt(item.price)}</td>
-            <td class="r">${fmt(item.price * item.qty)}</td>
+            <td class="r">${fmtInv(item.price, inv)}</td>
+            <td class="r">${fmtInv(item.price * item.qty, inv)}</td>
           </tr>`);
         } else {
           rows.push(`<tr>
             <td><strong>${item.name}</strong>${item.desc ? `<br/><span style="font-size:10px;color:#444">${item.desc}</span>` : ''}</td>
             <td class="c">${item.qty}</td>
-            <td class="r">${fmt(item.price)}</td>
-            <td class="r">${fmt(item.price * item.qty)}</td>
+            <td class="r">${fmtInv(item.price, inv)}</td>
+            <td class="r">${fmtInv(item.price * item.qty, inv)}</td>
           </tr>`);
         }
       }
@@ -4239,7 +4309,7 @@ function buildQuotationHTML(inv) {
           : `<div class="inv-logo-mark">${deriveInitials(S.bizName || currentShopName).charAt(0)}</div><div class="inv-logo-tagline">${S.bizName || currentShopName || ''}</div>`}
       </div>
       <div class="inv-title-block">
-        <h1>QUOTATION</h1>
+        <h1>QUOTATION${inv.currency === 'USD' ? ` <span style="font-size:12px;font-weight:700;color:#2563eb;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:2px 7px;vertical-align:middle">USD</span>` : ''}</h1>
         <div class="inv-company-right">
           <strong>${S.bizName}</strong>
           ${S.bizLocation}<br/>
@@ -4278,16 +4348,17 @@ function buildQuotationHTML(inv) {
     </div>
     <div class="inv-totals">
       <div class="inv-totals-box">
-        <div class="inv-totals-line"><span class="lbl">Subtotal</span><span class="val">${fmt(inv.subtotal)}</span></div>
-        ${inv.discountAmt > 0 ? `<div class="inv-totals-line discount"><span class="lbl">Discount (${inv.discountPct}%)</span><span class="val">&minus; ${fmt(inv.discountAmt)}</span></div>` : ''}
-        ${inv.vatAmt > 0 ? `<div class="inv-totals-line"><span class="lbl">VAT (${inv.vatRate}%)</span><span class="val">${fmt(inv.vatAmt)}</span></div>` : ''}
-        <div class="inv-totals-line" style="font-weight:700;font-size:13px;border-top:2px solid #ccc;padding-top:8px;margin-top:4px"><span class="lbl" style="color:#111">Total</span><span class="val" style="color:#111">${fmt(inv.total)}</span></div>
+        <div class="inv-totals-line"><span class="lbl">Subtotal</span><span class="val">${fmtInv(inv.subtotal, inv)}</span></div>
+        ${inv.discountAmt > 0 ? `<div class="inv-totals-line discount"><span class="lbl">Discount (${inv.discountPct}%)</span><span class="val">&minus; ${fmtInv(inv.discountAmt, inv)}</span></div>` : ''}
+        ${inv.vatAmt > 0 ? `<div class="inv-totals-line"><span class="lbl">VAT (${inv.vatRate}%)</span><span class="val">${fmtInv(inv.vatAmt, inv)}</span></div>` : ''}
+        <div class="inv-totals-line" style="font-weight:700;font-size:13px;border-top:2px solid #ccc;padding-top:8px;margin-top:4px"><span class="lbl" style="color:#111">Total</span><span class="val" style="color:#111">${fmtInv(inv.total, inv)}</span></div>
+        ${inv.currency === 'USD' && inv.fxRate ? `<div class="inv-totals-line" style="font-size:10px;color:#64748b"><span class="lbl">Rate</span><span class="val">1 USD = KSh ${inv.fxRate} (${fmt(inv.total)})</span></div>` : ''}
       </div>
     </div>
     <div style="display:flex;justify-content:flex-end;margin-bottom:4px;margin-top:8px">
       <div class="inv-amount-due" style="background:#d97706">
         <span class="lbl">Quoted Price</span>
-        <span class="val">${fmt(inv.total)}</span>
+        <span class="val">${fmtInv(inv.total, inv)}</span>
       </div>
     </div>
     ${(() => {
@@ -4326,7 +4397,7 @@ function buildQuotationHTML(inv) {
 }
 
 function buildReceiptHTML(inv) {
-  const _rCl      = inv.clientId ? clients.find(c => c.id === inv.clientId) : null;
+  const _rCl      = resolveDocClient(inv);
   const _rRefCode = _rCl?.referral_code || null;
   const pays = invPayments(inv.id);
   const totalPaid = pays.reduce((a, p) => a + p.amount, 0);
@@ -4340,7 +4411,7 @@ function buildReceiptHTML(inv) {
       <div class="receipt-company"><strong>${(S.bizName || currentShopName || '').toUpperCase()}</strong><br/>${S.bizLocation}<br/>${S.bizPhone1}</div>
     </div>
     <div style="text-align:center;font-size:9px;margin-bottom:10px">
-      Receipt #: ${inv.id}<br/>Date: ${inv.date} ${inv.time}
+      Receipt #: ${inv.id}${inv.currency === 'USD' ? ' <strong>(USD)</strong>' : ''}<br/>Date: ${inv.date} ${inv.time}
     </div>
     <div style="border-bottom:1px dashed var(--border);padding-bottom:10px;margin-bottom:10px;font-size:9px">
       <strong>${inv.clientName}</strong><br/>
@@ -4350,19 +4421,20 @@ function buildReceiptHTML(inv) {
     </div>
     <div class="receipt-items">
       ${inv.items.map(item => `<div class="receipt-item-line">
-        <div class="receipt-item-desc"><strong>${item.name}</strong><br/><span>x${item.qty} @ ${fmt(item.price)}</span></div>
-        <div class="receipt-item-price">${fmt(item.price * item.qty)}</div>
+        <div class="receipt-item-desc"><strong>${item.name}</strong><br/><span>x${item.qty} @ ${fmtInv(item.price, inv)}</span></div>
+        <div class="receipt-item-price">${fmtInv(item.price * item.qty, inv)}</div>
       </div>`).join('')}
     </div>
     <div class="receipt-totals">
-      <div class="receipt-total-line"><span>Subtotal</span><span style="text-align:right">${fmt(inv.subtotal)}</span></div>
-      ${inv.discountAmt > 0 ? `<div class="receipt-total-line"><span>Discount</span><span style="text-align:right">-${fmt(inv.discountAmt)}</span></div>` : ''}
-      ${inv.vatAmt > 0 ? `<div class="receipt-total-line"><span>VAT (${inv.vatRate}%)</span><span style="text-align:right">${fmt(inv.vatAmt)}</span></div>` : ''}
-      <div class="receipt-total-line final"><span class="label">TOTAL</span><span class="amount">${fmt(inv.total)}</span></div>
+      <div class="receipt-total-line"><span>Subtotal</span><span style="text-align:right">${fmtInv(inv.subtotal, inv)}</span></div>
+      ${inv.discountAmt > 0 ? `<div class="receipt-total-line"><span>Discount</span><span style="text-align:right">-${fmtInv(inv.discountAmt, inv)}</span></div>` : ''}
+      ${inv.vatAmt > 0 ? `<div class="receipt-total-line"><span>VAT (${inv.vatRate}%)</span><span style="text-align:right">${fmtInv(inv.vatAmt, inv)}</span></div>` : ''}
+      <div class="receipt-total-line final"><span class="label">TOTAL</span><span class="amount">${fmtInv(inv.total, inv)}</span></div>
+      ${inv.currency === 'USD' && inv.fxRate ? `<div class="receipt-total-line" style="font-size:8px;color:#666"><span>Rate: 1 USD = KSh ${inv.fxRate}</span><span style="text-align:right">${fmt(inv.total)}</span></div>` : ''}
       <div style="margin-top:8px;border-top:1px dashed var(--border);padding-top:8px">
-        <div class="receipt-total-line"><span style="font-weight:600">Amount Paid</span><span style="text-align:right;color:var(--green);font-weight:700">${fmt(totalPaid)}</span></div>
+        <div class="receipt-total-line"><span style="font-weight:600">Amount Paid</span><span style="text-align:right;color:var(--green);font-weight:700">${fmtInv(totalPaid, inv)}</span></div>
         ${balance > 0
-          ? `<div class="receipt-total-line"><span style="font-weight:600;color:#dc2626">Balance Due</span><span style="text-align:right;color:#dc2626;font-weight:700">${fmt(balance)}</span></div>
+          ? `<div class="receipt-total-line"><span style="font-weight:600;color:#dc2626">Balance Due</span><span style="text-align:right;color:#dc2626;font-weight:700">${fmtInv(balance, inv)}</span></div>
              <div style="text-align:center;margin-top:6px;padding:4px 8px;background:#fee2e2;border:1px dashed #fca5a5;border-radius:4px;font-size:9px;font-weight:700;color:#dc2626;letter-spacing:.5px">PARTIAL PAYMENT — BALANCE OUTSTANDING</div>`
           : `<div style="text-align:center;margin-top:6px;padding:4px 8px;background:#dcfce7;border:1px dashed #86efac;border-radius:4px;font-size:9px;font-weight:700;color:#166534;letter-spacing:.5px">PAID IN FULL</div>`
         }
@@ -4371,7 +4443,7 @@ function buildReceiptHTML(inv) {
     <div class="receipt-footer">
       <div class="receipt-footer-line"><strong>Payment Method</strong></div>
       ${pays.length > 1
-        ? pays.map(p => `<div class="receipt-footer-line" style="font-weight:700;font-size:11px;display:flex;justify-content:space-between">${fmtPayMethod(p.method)}<span>${fmt(p.amount)}</span></div>`).join('')
+        ? pays.map(p => `<div class="receipt-footer-line" style="font-weight:700;font-size:11px;display:flex;justify-content:space-between">${fmtPayMethod(p.method)}<span>${fmtInv(p.amount, inv)}</span></div>`).join('')
         : `<div class="receipt-footer-line" style="font-weight:700;font-size:11px">${fmtPayMethod(inv.payMethod)}</div>`
       }
       ${(() => {
@@ -4607,6 +4679,7 @@ function buildDocsStatementHTML(client, docs) {
   const invBalTotal = invDocs.reduce((a, d) => a + invBalance(d), 0);
   const grandTotal = docs.reduce((a, d) => a + (d.total || 0), 0);
 
+  const hasUsdDoc = docs.some(d => d.currency === 'USD');
   const rows = docs.map(d => {
     const isQt = d.type === 'quotation';
     const bal = isQt ? null : invBalance(d);
@@ -4616,8 +4689,8 @@ function buildDocsStatementHTML(client, docs) {
       <td style="padding:7px 8px;border-bottom:1px solid #eee;color:#555">${typeLabel}</td>
       <td style="padding:7px 8px;border-bottom:1px solid #eee;color:#555">${d.date || '—'}</td>
       <td style="padding:7px 8px;border-bottom:1px solid #eee">${invStatus(d)}</td>
-      <td style="padding:7px 8px;border-bottom:1px solid #eee;text-align:right">KSh ${Number(d.total || 0).toLocaleString()}</td>
-      <td style="padding:7px 8px;border-bottom:1px solid #eee;text-align:right${bal > 0 ? ';color:#dc2626;font-weight:700' : ''}">${bal == null ? '—' : 'KSh ' + Number(bal).toLocaleString()}</td>
+      <td style="padding:7px 8px;border-bottom:1px solid #eee;text-align:right">${fmtInv(d.total || 0, d)}</td>
+      <td style="padding:7px 8px;border-bottom:1px solid #eee;text-align:right${bal > 0 ? ';color:#dc2626;font-weight:700' : ''}">${bal == null ? '—' : fmtInv(bal, d)}</td>
     </tr>`;
   }).join('');
 
@@ -4642,6 +4715,7 @@ function buildDocsStatementHTML(client, docs) {
       <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px">Statement For</div>
       <div style="font-weight:700;font-size:13px">${client.name}</div>
       <div style="font-size:11px;color:#555">${client.phone || ''}${client.email ? ' · ' + client.email : ''}</div>
+      ${client.referral_code ? `<div style="margin-top:4px;font-family:monospace;font-size:10px;color:#2563eb;font-weight:700;letter-spacing:.5px">REF: ${client.referral_code}</div>` : ''}
     </div>
     <table style="width:100%;border-collapse:collapse">
       <thead><tr style="background:#f5f5f3">
@@ -4656,14 +4730,15 @@ function buildDocsStatementHTML(client, docs) {
     </table>
     <div style="margin-top:18px;display:flex;justify-content:flex-end;gap:32px">
       <div style="text-align:right">
-        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.4px">Total Billed</div>
+        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.4px">Total Billed${hasUsdDoc ? ' (KSh equiv.)' : ''}</div>
         <div style="font-size:15px;font-weight:700">KSh ${grandTotal.toLocaleString()}</div>
       </div>
       ${invBalTotal > 0 ? `<div style="text-align:right">
-        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.4px">Balance Due</div>
+        <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.4px">Balance Due${hasUsdDoc ? ' (KSh equiv.)' : ''}</div>
         <div style="font-size:15px;font-weight:700;color:#dc2626">KSh ${invBalTotal.toLocaleString()}</div>
       </div>` : ''}
     </div>
+    ${hasUsdDoc ? `<div style="margin-top:6px;text-align:right;font-size:9px;color:#888">Documents billed in USD are shown at their sale-time rate; grand totals are converted back to KSh.</div>` : ''}
   </div>`;
 }
 
@@ -4864,11 +4939,12 @@ function _refreshEditTotals() {
   const va   = Math.round((sub - da) * vr / 100);
   const tot  = sub - da + va;
   const el   = document.getElementById('edit-inv-totals'); if (!el) return;
+  const fmtE = n => fmtInv(n, inv);
   el.innerHTML = `
-    <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Subtotal</span><span>${fmt(sub)}</span></div>
-    ${disc ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Discount (${disc}%)</span><span style="color:#dc2626">- ${fmt(da)}</span></div>` : ''}
-    ${vr  ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">VAT (${vr}%)</span><span>${fmt(va)}</span></div>` : ''}
-    <div style="display:flex;justify-content:space-between;font-weight:700;font-size:14px;border-top:1px solid var(--border);margin-top:5px;padding-top:7px"><span>Total</span><span style="color:var(--red)">${fmt(tot)}</span></div>`;
+    <div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Subtotal</span><span>${fmtE(sub)}</span></div>
+    ${disc ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">Discount (${disc}%)</span><span style="color:#dc2626">- ${fmtE(da)}</span></div>` : ''}
+    ${vr  ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">VAT (${vr}%)</span><span>${fmtE(va)}</span></div>` : ''}
+    <div style="display:flex;justify-content:space-between;font-weight:700;font-size:14px;border-top:1px solid var(--border);margin-top:5px;padding-top:7px"><span>Total</span><span style="color:var(--red)">${fmtE(tot)}</span></div>`;
 }
 
 function _onEditDeptPick() {
@@ -5984,7 +6060,7 @@ async function sendStatementEmail(client, docs) {
         try {
           const base64PDF = reader.result.split(',')[1];
           updateStatusMessage(statusMsg, '📤 Sending email...');
-          const documents = docs.map(d => ({ id: d.id, type: d.type === 'quotation' ? 'Quotation' : d.type === 'cash_sale' ? 'Cash Sale' : 'Invoice', date: d.date, status: invStatus(d), total: d.total }));
+          const documents = docs.map(d => ({ id: d.id, type: d.type === 'quotation' ? 'Quotation' : d.type === 'cash_sale' ? 'Cash Sale' : 'Invoice', date: d.date, status: invStatus(d), total: d.total, currency: d.currency, fxRate: d.fxRate }));
           const response = await fetch('/.netlify/functions/send-invoice-email', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -8277,8 +8353,23 @@ function renderSettings() {
               <span style="font-size:10px;color:var(--muted);margin-left:8px">Standard Kenya VAT is 16%</span>
             </div>
           </div>
+          <div style="border:1px solid var(--border);border-radius:8px;padding:12px;display:grid;gap:10px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:600;margin:0">
+                <input type="checkbox" id="set-usdEnabled" ${s.usdEnabled ? 'checked' : ''}
+                  onchange="document.getElementById('usd-rate-row').style.display=this.checked?'':'none'"
+                  style="width:16px;height:16px;accent-color:var(--red);cursor:pointer"/>
+                Allow billing sales in US Dollars (USD)
+              </label>
+            </div>
+            <div id="usd-rate-row" style="display:${s.usdEnabled ? '' : 'none'}">
+              <label>USD Exchange Rate (1 USD = KSh)</label>
+              <input type="number" id="set-usdRate" value="${s.usdRate || 130}" min="1" step="0.01" placeholder="130" style="width:120px"/>
+              <span style="font-size:10px;color:var(--muted);margin-left:8px">Keep this in step with today's market rate — it's what converts KSh prices for USD sales.</span>
+            </div>
+          </div>
           <div style="background:#dbeafe;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:11px;color:#1e40af">
-            <i class="ti ti-info-circle"></i> Bank details and KRA PIN appear on invoices, quotations and receipts, and on emailed copies. VAT is applied on new sales only — existing invoices retain their original amounts.
+            <i class="ti ti-info-circle"></i> Bank details and KRA PIN appear on invoices, quotations and receipts, and on emailed copies. VAT is applied on new sales only — existing invoices retain their original amounts. When USD is enabled, a "Bill this sale in USD" toggle appears on the New Sale tab — prices are still entered in KSh and converted at the rate above, and every document (invoice, quotation, receipt) is generated in the currency chosen for that sale.
           </div>
         </div>
       </div>
@@ -8358,6 +8449,8 @@ async function saveSettings() {
   });
   SETTINGS.vatEnabled = !!document.getElementById('set-vatEnabled')?.checked;
   SETTINGS.vatRate    = parseFloat(document.getElementById('set-vatRate')?.value) || 16;
+  SETTINGS.usdEnabled = !!document.getElementById('set-usdEnabled')?.checked;
+  SETTINGS.usdRate    = parseFloat(document.getElementById('set-usdRate')?.value) || 130;
   DEPTS = getDepts();  // Update DEPTS after saving
   const saveErr = await persistShopSettings();
   const msg = document.getElementById('settings-saved-msg');
