@@ -1,0 +1,10 @@
+# Old domain is kept deployed as a fallback (see .cpanel.yml) but should not
+# be the one people actually use day-to-day — send visitors on to the new
+# domain. Scoped to the old hostname only, so this is harmless if this file
+# ever ends up served from pos.edoscentre.co.ke itself.
+#
+# To reactivate this old deployment as a real fallback (e.g. if Vercel is
+# ever down), just delete or rename this file in cPanel File Manager.
+RewriteEngine On
+RewriteCond %{HTTP_HOST} ^mejasanmedia\.edoscentre\.co\.ke$ [NC]
+RewriteRule ^(.*)$ https://pos.edoscentre.co.ke/$1 [R=301,L]
