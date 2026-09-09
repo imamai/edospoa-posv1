@@ -3680,13 +3680,20 @@ async function checkout() {
 
   if (!clientName) clientName = 'Walk-in #' + uid();
 
-  // Auto-create client record from POS fields if phone supplied and not already known
+  // Auto-create client record from POS fields if phone supplied and not already known.
+  // Track the resolved id (matched or freshly created) so this sale actually
+  // links to that client record — leaving clientId null here is what caused
+  // the client's referral code to be dropped from their invoice.
+  let resolvedClientId = clientSel || null;
   if (!clientSel && clientPhone) {
     const existing = clients.find(c => c.phone === clientPhone);
-    if (!existing) {
+    if (existing) {
+      resolvedClientId = existing.id;
+    } else {
       const nc = { id: uid(), name: clientName, phone: clientPhone, email: clientEmail || '', event: '', birthday: null, notes: '', referral_code: genReferralCode(clientName), referred_by: null, createdAt: dateStr() };
       clients.push(nc);
       await dbInsertClient(nc);
+      resolvedClientId = nc.id;
     }
   }
 
@@ -3712,7 +3719,7 @@ async function checkout() {
     id: nextInvoiceNumber(),
     type: 'invoice',
     clientName, clientPhone, clientEmail: clientEmail || '',
-    clientWhatsApp: clientWA || '', clientId: clientSel || null,
+    clientWhatsApp: clientWA || '', clientId: resolvedClientId,
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
     vatRate, vatAmt, currency, fxRate,
     total, payMethod: effectivePM, status: payMethod === 'credit' ? 'Unpaid' : (isPartial ? 'Partial' : 'Paid'),
@@ -3901,12 +3908,19 @@ async function checkoutAsCashSale() {
 
   if (!clientName) clientName = 'Walk-in #' + uid();
 
+  // Track the resolved id (matched or freshly created) so this sale actually
+  // links to that client record — leaving clientId null here is what caused
+  // the client's referral code to be dropped from their receipt.
+  let resolvedClientId = clientSel || null;
   if (!clientSel && clientPhone) {
     const existing = clients.find(c => c.phone === clientPhone);
-    if (!existing) {
+    if (existing) {
+      resolvedClientId = existing.id;
+    } else {
       const nc = { id: uid(), name: clientName, phone: clientPhone, email: clientEmail || '', event: '', birthday: null, notes: '', referral_code: genReferralCode(clientName), referred_by: null, createdAt: dateStr() };
       clients.push(nc);
       await dbInsertClient(nc);
+      resolvedClientId = nc.id;
     }
   }
 
@@ -3937,7 +3951,7 @@ async function checkoutAsCashSale() {
     id: nextCashSaleNumber(),
     type: 'cash_sale',
     clientName, clientPhone, clientEmail: clientEmail || '',
-    clientWhatsApp: clientWA || '', clientId: clientSel || null,
+    clientWhatsApp: clientWA || '', clientId: resolvedClientId,
     items: [...cart], subtotal: sub, discountPct: disc, discountAmt: da,
     vatRate, vatAmt, total, currency, fxRate,
     payMethod: effectivePM, status: isPartial ? 'Partial' : 'Paid',
@@ -4049,8 +4063,24 @@ async function deleteHeldOrder(id) {
 }
 
 // ── INVOICE BUILDERS ─────────────────────────────────────
+// Resolves the client record behind a document — by clientId first, falling
+// back to a phone match. Most sales are rung up by typing the client's name
+// and phone rather than picking them from the suggestions list, which leaves
+// clientId unset even though a matching (or freshly auto-created) client
+// record exists. Without this fallback, that client's referral code silently
+// drops off their invoice/quotation/receipt.
+function resolveDocClient(doc) {
+  if (!doc) return null;
+  if (doc.clientId) {
+    const byId = clients.find(c => c.id === doc.clientId);
+    if (byId) return byId;
+  }
+  if (doc.clientPhone) return clients.find(c => c.phone === doc.clientPhone) || null;
+  return null;
+}
+
 function buildInvoiceHTML(inv) {
-  const _invClient = inv.clientId ? clients.find(c => c.id === inv.clientId) : null;
+  const _invClient = resolveDocClient(inv);
   const _refCode   = _invClient?.referral_code || null;
   const pays = invPayments(inv.cashSaleRef || inv.id);
   const totalPaid = pays.reduce((a, p) => a + p.amount, 0);
@@ -4225,7 +4255,7 @@ function buildInvoiceHTML(inv) {
 }
 
 function buildQuotationHTML(inv) {
-  const _qCl      = inv.clientId ? clients.find(c => c.id === inv.clientId) : null;
+  const _qCl      = resolveDocClient(inv);
   const _qRefCode = _qCl?.referral_code || null;
   const S = SETTINGS;
 
@@ -4367,7 +4397,7 @@ function buildQuotationHTML(inv) {
 }
 
 function buildReceiptHTML(inv) {
-  const _rCl      = inv.clientId ? clients.find(c => c.id === inv.clientId) : null;
+  const _rCl      = resolveDocClient(inv);
   const _rRefCode = _rCl?.referral_code || null;
   const pays = invPayments(inv.id);
   const totalPaid = pays.reduce((a, p) => a + p.amount, 0);
@@ -4685,6 +4715,7 @@ function buildDocsStatementHTML(client, docs) {
       <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.4px;margin-bottom:2px">Statement For</div>
       <div style="font-weight:700;font-size:13px">${client.name}</div>
       <div style="font-size:11px;color:#555">${client.phone || ''}${client.email ? ' · ' + client.email : ''}</div>
+      ${client.referral_code ? `<div style="margin-top:4px;font-family:monospace;font-size:10px;color:#2563eb;font-weight:700;letter-spacing:.5px">REF: ${client.referral_code}</div>` : ''}
     </div>
     <table style="width:100%;border-collapse:collapse">
       <thead><tr style="background:#f5f5f3">
