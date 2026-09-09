@@ -5,3 +5,4 @@ deployment:
     - /bin/cp -f index.html $DEPLOYPATH
     - /bin/cp -f edospoa-pos.html $DEPLOYPATH
     - /bin/cp -f edospoa-admin.html $DEPLOYPATH
+    - /bin/cp -f .htaccess $DEPLOYPATH
